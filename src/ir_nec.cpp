@@ -1,4 +1,6 @@
 #include "ir_nec.h"
+#include <FreeRTOS.h>
+#include <task.h>
 
 // NEC timing (µs)
 static constexpr uint32_t NEC_HDR_MARK   = 9000;
@@ -50,6 +52,7 @@ void IrReceiver::onEdge() {
     if (_frameReady) return;              // previous frame not consumed yet: drop
 
     if (dt > FRAME_GAP) {                 // long silence: this edge starts a new frame
+        _gapPending = dt;
         if (_count > 0) { _frameReady = true; return; }
         _count = 0;
         return;
@@ -72,6 +75,7 @@ bool IrReceiver::poll(IrFrame &out, uint32_t *timings, int max) {
         return false;
     }
 
+    _gapBefore = _gapPending;
     out = IrFrame{};
     out.pulses  = _count;
     out.decoded = decodeNec(out);
@@ -159,7 +163,9 @@ void IrSender::setPwm(bool usePwm) {
 
 void IrSender::setCarrier(uint32_t hz) {
     _carrierHz = hz;
-    calibrate();
+    uint8_t pins[MAX_PINS]; int n = _count;
+    for (int i = 0; i < n; i++) pins[i] = _pins[i];
+    setPins(pins, n);                                // re-applies the PWM period
 }
 
 void IrSender::calibrate() {
@@ -187,6 +193,10 @@ void IrSender::calibrate() {
         }
         _pwmOnOverheadUs = on / 20;
         _pwmOffOverheadUs = off / 20;
+        // Defaults from loopback measurements on the CB3S: the stop call
+        // lengthens the mark it ends, the start call lengthens the space it ends.
+        _markCompUs  = _pwmOffOverheadUs;
+        _spaceCompUs = _pwmOnOverheadUs;
     }
 }
 
@@ -228,9 +238,8 @@ void IrSender::mark(uint32_t us) {
     for (int i = 0; i < _count; i++) if (!_pwmOk[i]) anyBitbang = true;
     pinsCarrier(true);
     if (!anyBitbang) {
-        // the stop call at the end of this mark also counts towards it
-        uint32_t ovh = _pwmOnOverheadUs + _pwmOffOverheadUs;
-        us = us > ovh + 20 ? us - ovh : 20;
+        int32_t adj = (int32_t)us - _markCompUs;
+        us = adj > 20 ? (uint32_t)adj : 20;
         while (us > 10000) { delayMicroseconds(10000); us -= 10000; }
         delayMicroseconds(us);
     } else {
@@ -248,31 +257,34 @@ void IrSender::mark(uint32_t us) {
 
 void IrSender::space(uint32_t us) {
     writeAll(LOW);
-    // the start call of the next mark lands inside this space
-    us = us > _pwmOnOverheadUs + 20 ? us - _pwmOnOverheadUs : 20;
+    int32_t adj = (int32_t)us - _spaceCompUs;
+    us = adj > 20 ? (uint32_t)adj : 20;
     while (us > 10000) { delayMicroseconds(10000); us -= 10000; }
     delayMicroseconds(us);
 }
 
 void IrSender::sendTimings(const uint32_t *t, int n) {
     if (_count == 0 || n <= 0) return;
+    // Run at top priority while transmitting so the WiFi task cannot preempt
+    // us mid-pulse (seen as random multi-ms stretches of single spaces).
+    // (Suspending the scheduler instead broke the PWM driver and crashed.)
+    UBaseType_t prio = uxTaskPriorityGet(NULL);
+    vTaskPrioritySet(NULL, configMAX_PRIORITIES - 1);
     for (int i = 0; i < n; i++) {
         if (i & 1) space(t[i]); else mark(t[i]);
     }
     pinsIdle();
+    vTaskPrioritySet(NULL, prio);
     space(TX_GAP);
 }
 
 void IrSender::sendNecRaw(uint32_t word) {
     if (_count == 0) return;
-    mark(NEC_HDR_MARK);
-    space(NEC_HDR_SPACE);
-    for (int i = 0; i < 32; i++) {
-        mark(NEC_BIT_MARK);
-        space((word >> i) & 1 ? NEC_ONE_SPACE : NEC_ZERO_SPACE);
-    }
-    mark(NEC_BIT_MARK);
-    space(TX_GAP);
+    uint32_t t[67]; int k = 0;
+    t[k++] = NEC_HDR_MARK; t[k++] = NEC_HDR_SPACE;
+    for (int i = 0; i < 32; i++) { t[k++] = NEC_BIT_MARK; t[k++] = (word >> i) & 1 ? NEC_ONE_SPACE : NEC_ZERO_SPACE; }
+    t[k++] = NEC_BIT_MARK;
+    sendTimings(t, k);
 }
 
 void IrSender::sendNec(uint8_t address, uint8_t command) {
@@ -285,10 +297,8 @@ void IrSender::sendNec(uint8_t address, uint8_t command) {
 
 void IrSender::sendRepeat() {
     if (_count == 0) return;
-    mark(NEC_HDR_MARK);
-    space(NEC_RPT_SPACE);
-    mark(NEC_BIT_MARK);
-    space(TX_GAP);
+    uint32_t t[3] = {NEC_HDR_MARK, NEC_RPT_SPACE, NEC_BIT_MARK};
+    sendTimings(t, 3);
 }
 
 void IrSender::burst(uint32_t onMs, uint32_t offMs, uint32_t totalMs) {

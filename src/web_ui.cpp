@@ -164,7 +164,7 @@ static void handleStatus() {
     j += "\"ssid\":" + jsonStr(cfg.ssid) + ",";
     j += "\"ip\":\"" + appIp() + "\",";
     j += "\"rssi\":" + String(appWifiConnected() ? WiFi.RSSI() : 0) + ",";
-    j += "\"carrier\":" + String(IR_CARRIER_HZ) + ",";
+    j += "\"carrier\":" + String(cfg.carrierHz) + ",";
     j += "\"rx_idle\":\"" + String(cfg.rxPin == NO_PIN ? "n/a" : (digitalRead(cfg.rxPin) ? "HIGH" : "LOW (no receiver?)")) + "\",";
     j += "\"pins\":{\"led1\":" + pinJson(cfg.ledPin[0]) + ",\"led2\":" + pinJson(cfg.ledPin[1]) +
          ",\"led3\":" + pinJson(cfg.ledPin[2]) + ",\"rx\":" + pinJson(cfg.rxPin) +

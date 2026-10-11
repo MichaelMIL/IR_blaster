@@ -14,6 +14,9 @@
 #ifndef STATUS_LED_PIN
 #define STATUS_LED_PIN 8       // blue LED on this board
 #endif
+#ifndef IR_CARRIER_HZ
+#define IR_CARRIER_HZ 38000
+#endif
 #ifndef FLASH_USERDATA_OFFSET
 #error "FLASH_USERDATA_OFFSET not defined by the board"
 #endif
@@ -30,10 +33,11 @@ struct __attribute__((packed)) StoredConfig {
     uint8_t  rxPin;
     uint8_t  statusPin;
     uint8_t  statusInvert;
+    uint32_t carrierHz;
     uint32_t crc;
 };
 static constexpr uint32_t CFG_MAGIC   = 0x49524231;   // "IRB1"
-static constexpr uint16_t CFG_VERSION = 2;
+static constexpr uint16_t CFG_VERSION = 3;
 static constexpr uint32_t CFG_OFFSET  = FLASH_USERDATA_OFFSET;
 
 static uint32_t crc32(const uint8_t *p, size_t n) {
@@ -53,13 +57,29 @@ void DeviceConfig::reset() {
     rxPin = IR_RX_PIN;
     statusPin = STATUS_LED_PIN;
     statusInvert = false;
+    carrierHz = IR_CARRIER_HZ;
 }
 
 void DeviceConfig::load() {
     reset();
     StoredConfig s;
     if (lt_flash_read(CFG_OFFSET, (uint8_t *)&s, sizeof(s)) != sizeof(s)) return;
-    if (s.magic != CFG_MAGIC || s.version != CFG_VERSION || s.length != sizeof(s)) return;
+    if (s.magic != CFG_MAGIC) return;
+    if (s.version == 2 && s.length == sizeof(s) - sizeof(s.carrierHz)) {
+        // v2 layout: same fields without carrierHz, crc right after statusInvert
+        struct __attribute__((packed)) V2 { uint32_t magic; uint16_t version, length; char ssid[33]; char pass[65];
+                                            uint8_t ledPin[LED_COUNT]; uint8_t rxPin, statusPin, statusInvert; uint32_t crc; } v2;
+        lt_flash_read(CFG_OFFSET, (uint8_t *)&v2, sizeof(v2));
+        if (v2.crc != crc32((uint8_t *)&v2, sizeof(v2) - 4)) return;
+        v2.ssid[32] = 0; v2.pass[64] = 0;
+        ssid = v2.ssid; pass = v2.pass;
+        for (int i = 0; i < LED_COUNT; i++) ledPin[i] = v2.ledPin[i];
+        rxPin = v2.rxPin; statusPin = v2.statusPin; statusInvert = v2.statusInvert != 0;
+        Serial.println("config: migrated from v2");
+        save();
+        return;
+    }
+    if (s.version != CFG_VERSION || s.length != sizeof(s)) return;
     if (s.crc != crc32((uint8_t *)&s, sizeof(s) - sizeof(s.crc))) {
         Serial.println("config: bad checksum, using defaults");
         return;
@@ -72,6 +92,7 @@ void DeviceConfig::load() {
     rxPin = s.rxPin;
     statusPin = s.statusPin;
     statusInvert = s.statusInvert != 0;
+    carrierHz = (s.carrierHz >= 30000 && s.carrierHz <= 60000) ? s.carrierHz : IR_CARRIER_HZ;
 }
 
 void DeviceConfig::save() const {
@@ -85,6 +106,7 @@ void DeviceConfig::save() const {
     s.rxPin = rxPin;
     s.statusPin = statusPin;
     s.statusInvert = statusInvert ? 1 : 0;
+    s.carrierHz = carrierHz;
     s.crc = crc32((uint8_t *)&s, sizeof(s) - sizeof(s.crc));
 
     if (!lt_flash_erase_block(CFG_OFFSET)) { Serial.println("config: erase failed"); return; }

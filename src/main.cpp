@@ -170,8 +170,8 @@ static void printStatus() {
     wifiStatus();
     Serial.print("pins:");
     for (int i = 0; i < LED_COUNT; i++) Serial.printf(" led%d=%s", i + 1, pinName(cfg.ledPin[i]));
-    Serial.printf(" rx=%s status=%s%s carrier=%dHz\n", pinName(cfg.rxPin), pinName(cfg.statusPin),
-                  cfg.statusInvert ? "(inv)" : "", IR_CARRIER_HZ);
+    Serial.printf(" rx=%s status=%s%s carrier=%luHz (hw %lu)\n", pinName(cfg.rxPin), pinName(cfg.statusPin),
+                  cfg.statusInvert ? "(inv)" : "", (unsigned long)cfg.carrierHz, 1000000UL / (1000000UL / cfg.carrierHz));
 }
 
 static void printHelp() {
@@ -191,6 +191,7 @@ static void printHelp() {
         "  export                       JSON of last capture + all recordings (also GET /api/export)\n"
         "  txtest <name>                play with receiver on, compare what came back (hold a hand in front)\n"
         "  txcal | txmode pwm|bitbang   carrier diagnostics\n"
+        "  carrier <hz>                 set IR carrier (saved), e.g. carrier 36000\n"
         "test mode:\n"
         "  led <1-3> pin <P#|none>      assign GPIO to an IR LED\n"
         "  led <1-3> test [sec]         blink carrier on that LED only (watch via phone camera)\n"
@@ -356,11 +357,31 @@ int appRecord(const char *name, uint32_t waitSec, String &msg) {
     if (!rx.active()) { msg = "no receiver pin assigned (run rx scan)"; return -1; }
     uint32_t end = millis() + waitSec * 1000;
     IrFrame f;
+    static uint32_t part[IrReceiver::MAX_EDGES];
     while ((int32_t)(millis() - end) < 0) {
         if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) {
             lastN = f.pulses < IrReceiver::MAX_EDGES ? f.pulses : IrReceiver::MAX_EDGES;
             if (lastN < 3) continue;                       // noise
             printFrame(f); recordFrame(f);
+            // Some remotes send the message 2-3 times with 100-300 ms of silence
+            // in between. Keep collecting for a while and store the gaps as spaces
+            // so the replay reproduces the whole key press.
+            int frames = 1;
+            uint32_t quiet = millis() + 400;
+            while ((int32_t)(millis() - quiet) < 0) {
+                if (rx.poll(f, part, IrReceiver::MAX_EDGES)) {
+                    int pn = f.pulses < IrReceiver::MAX_EDGES ? f.pulses : IrReceiver::MAX_EDGES;
+                    if (pn < 3) continue;
+                    uint32_t gap = rx.lastGapUs();
+                    if (lastN + 1 + pn > IrReceiver::MAX_EDGES) break;
+                    lastCapture[lastN++] = gap;             // space between the frames
+                    for (int i = 0; i < pn; i++) lastCapture[lastN++] = part[i];
+                    frames++;
+                    quiet = millis() + 400;
+                }
+                delay(1);
+            }
+            if (frames > 1) Serial.printf("captured %d frames in one key press\n", frames);
             return appSaveLast(name, msg) ? lastN : -1;
         }
         statusLedTick();
@@ -388,11 +409,24 @@ bool appPlay(const char *name, String &msg) {
 // Loopback: play a recording while the receiver keeps listening, then compare.
 // Works when some LED light reflects back into the receiver (hold a hand or
 // paper ~10 cm in front of the device).
-static void txTest(const char *name) {
-    int slot = recFind(name);
-    if (slot < 0) { Serial.println("not found"); return; }
-    int n = recLoad(slot, playBuf, REC_MAX_PULSES);
-    n = irCleanGlitches(playBuf, n);
+static int necTimings(uint8_t a, uint8_t c, uint32_t *t) {
+    uint32_t w = (uint32_t)a | ((uint32_t)(uint8_t)~a << 8) | ((uint32_t)c << 16) | ((uint32_t)(uint8_t)~c << 24);
+    int k = 0; t[k++] = 9000; t[k++] = 4500;
+    for (int i = 0; i < 32; i++) { t[k++] = 562; t[k++] = (w >> i) & 1 ? 1687 : 562; }
+    t[k++] = 562;
+    return k;
+}
+
+static void txTest(const char *name, int necAddr = -1, int necCmd = -1) {
+    int n;
+    if (necAddr >= 0) {
+        n = necTimings(necAddr, necCmd, playBuf);
+    } else {
+        int slot = recFind(name);
+        if (slot < 0) { Serial.println("not found"); return; }
+        n = recLoad(slot, playBuf, REC_MAX_PULSES);
+        n = irCleanGlitches(playBuf, n);
+    }
     if (!rx.active()) { Serial.println("no rx pin"); return; }
     if (tx.pinCount() == 0) { Serial.println("no LED pins"); return; }
     Serial.printf("txtest '%s': sending %d pulses (%s carrier), receiver stays on\n", name, n, tx.pwm() ? "PWM" : "bit-bang");
@@ -402,14 +436,19 @@ static void txTest(const char *name) {
     while ((int32_t)(millis() - end) < 0) {
         if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) {
             lastN = f.pulses; got = true;
-            Serial.printf("  received back: %d pulses (sent %d)\n", lastN, n);
-            int k = lastN < n ? lastN : n; int bad = 0; long sumErr = 0;
+            Serial.printf("  received back: %d pulses (sent %d)%s\n", lastN, n,
+                          f.decoded ? "" : "  [not decodable as NEC]");
+            if (f.decoded) Serial.printf("  decoded as NEC addr=0x%02X cmd=0x%02X raw=0x%08lX\n", f.address, f.command, (unsigned long)f.raw);
+            int k = lastN < n ? lastN : n; int bad = 0; long sumErr = 0, mErr = 0, sErr = 0; int mN = 0, sN = 0;
             for (int i = 0; i < k; i++) {
                 long e = (long)lastCapture[i] - (long)playBuf[i];
                 sumErr += e < 0 ? -e : e;
+                if (i & 1) { sErr += e; sN++; } else { mErr += e; mN++; }
                 if ((e < 0 ? -e : e) > (long)(playBuf[i] / 4) + 60) bad++;
             }
-            Serial.printf("  mean |error| %ld us over %d pulses, %d pulse(s) off by >25%%\n", k ? sumErr / k : 0, k, bad);
+            Serial.printf("  mean |error| %ld us over %d pulses, %d pulse(s) off by >25%%; marks %+ld us, spaces %+ld us (signed mean)\n",
+                          k ? sumErr / k : 0, k, bad, mN ? mErr / mN : 0, sN ? sErr / sN : 0);
+            Serial.printf("  (compensation: mark -%ld us, space -%ld us; adjust with: txcomp <mark> <space>)\n", (long)tx.markComp(), (long)tx.spaceComp());
             Serial.print("  sent:     "); for (int i = 0; i < 12 && i < n; i++) Serial.printf("%lu ", (unsigned long)playBuf[i]); Serial.println();
             Serial.print("  received: "); for (int i = 0; i < 12 && i < lastN; i++) Serial.printf("%lu ", (unsigned long)lastCapture[i]); Serial.println();
             break;
@@ -521,11 +560,30 @@ static void handleCommand(const String &cmd) {
         String msg; appPlay(t[1].c_str(), msg); Serial.println(msg); return;
     }
     if (c == "list") { listRecordings(); return; }
-    if (c == "txtest") { if (n < 2) Serial.println("usage: txtest <name>"); else txTest(t[1].c_str()); return; }
+    if (c == "txtest") {
+        if (n >= 4 && t[1] == "nec") { unsigned a = 0, cc = 0; sscanf(t[2].c_str(), "%i", &a); sscanf(t[3].c_str(), "%i", &cc); txTest("", a & 0xFF, cc & 0xFF); }
+        else if (n >= 2) txTest(t[1].c_str());
+        else Serial.println("usage: txtest <name> | txtest nec <addr> <cmd>");
+        return;
+    }
     if (c == "txcal") {
         Serial.printf("tx mode: %s; bit-bang carrier would be %lu Hz (target %d); pwm start+stop overhead %lu us (compensated)\n",
                       tx.pwm() ? "hardware PWM (38.46 kHz)" : "bit-bang", (unsigned long)tx.measureBitbangHz(), IR_CARRIER_HZ,
                       (unsigned long)tx.pwmOverheadUs());
+        return;
+    }
+    if (c == "carrier") {
+        if (n >= 2) {
+            long hz = t[1].toInt();
+            if (hz < 30000 || hz > 60000) { Serial.println("carrier: 30000..60000 Hz"); return; }
+            cfg.carrierHz = hz; cfg.save(); tx.setCarrier(hz);
+            Serial.printf("carrier %ld Hz saved (hardware PWM gives %lu Hz)\n", hz, 1000000UL / (1000000UL / hz)); return;
+        }
+        Serial.printf("carrier %lu Hz. usage: carrier <hz>   (try 36000 or 40000 if 38000 is ignored)\n", (unsigned long)cfg.carrierHz); return;
+    }
+    if (c == "txcomp") {
+        if (n >= 3) { tx.setCompensation(t[1].toInt(), t[2].toInt()); Serial.printf("compensation mark -%ld us, space -%ld us (not saved)\n", (long)tx.markComp(), (long)tx.spaceComp()); }
+        else Serial.println("usage: txcomp <markUs> <spaceUs>");
         return;
     }
     if (c == "txmode") {
@@ -634,8 +692,8 @@ void setup() {
     cfg.load();
     appApplyStatusLed();
     for (int i = 0; i < 3; i++) { statusWrite(true); delay(100); statusWrite(false); delay(100); }
-    tx.setCarrier(IR_CARRIER_HZ);
     applyTxPins();
+    tx.setCarrier(cfg.carrierHz);
     applyRxPin();
     printStatus();
     if (cfg.hasWifi()) wifiBegin();

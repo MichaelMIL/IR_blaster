@@ -34,6 +34,7 @@ public:
     // true when a frame is ready; optionally copies its raw timings (µs, mark first)
     bool poll(IrFrame &out, uint32_t *timings = nullptr, int max = 0);
     uint32_t edgeCount() const { return _totalEdges; }
+    uint32_t lastGapUs() const { return _gapBefore; }   // silence before the last frame returned by poll()
     uint32_t noiseCount() const { return _noise; }   // glitch frames dropped
 
 private:
@@ -48,6 +49,8 @@ private:
     volatile uint32_t _lastEdge = 0;
     volatile bool     _frameReady = false;
     volatile uint32_t _totalEdges = 0;
+    volatile uint32_t _gapBefore = 0;
+    volatile uint32_t _gapPending = 0;
     uint32_t _noise = 0;
 };
 
@@ -66,6 +69,9 @@ public:
     int  pinCount() const { return _count; }
     uint32_t measureBitbangHz();           // actual bit-bang carrier frequency, for diagnostics
     uint32_t pwmOverheadUs() const { return _pwmOnOverheadUs + _pwmOffOverheadUs; }
+    void setCompensation(int32_t markUs, int32_t spaceUs) { _markCompUs = markUs; _spaceCompUs = spaceUs; }
+    int32_t markComp() const { return _markCompUs; }
+    int32_t spaceComp() const { return _spaceCompUs; }
 
     void sendTimings(const uint32_t *t, int n);   // raw mark/space list, mark first
     void sendNec(uint8_t address, uint8_t command);
@@ -93,4 +99,6 @@ private:
     uint32_t _writeOverheadUs = 0;
     uint32_t _pwmOnOverheadUs = 0;     // cost of starting the PWM carrier
     uint32_t _pwmOffOverheadUs = 0;    // cost of stopping it
+    int32_t  _markCompUs = 0;          // subtracted from every mark (PWM mode)
+    int32_t  _spaceCompUs = 0;         // subtracted from every space (PWM mode)
 };
