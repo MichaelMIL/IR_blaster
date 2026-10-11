@@ -65,6 +65,7 @@ public:
     bool pwm() const { return _pwm; }
     int  pinCount() const { return _count; }
     uint32_t measureBitbangHz();           // actual bit-bang carrier frequency, for diagnostics
+    uint32_t pwmOverheadUs() const { return _pwmOnOverheadUs + _pwmOffOverheadUs; }
 
     void sendTimings(const uint32_t *t, int n);   // raw mark/space list, mark first
     void sendNec(uint8_t address, uint8_t command);
@@ -90,4 +91,6 @@ private:
     uint32_t _carrierHz = 38000;
     uint32_t _halfPeriodUs = 13;
     uint32_t _writeOverheadUs = 0;
+    uint32_t _pwmOnOverheadUs = 0;     // cost of starting the PWM carrier
+    uint32_t _pwmOffOverheadUs = 0;    // cost of stopping it
 };

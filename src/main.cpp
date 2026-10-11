@@ -523,8 +523,9 @@ static void handleCommand(const String &cmd) {
     if (c == "list") { listRecordings(); return; }
     if (c == "txtest") { if (n < 2) Serial.println("usage: txtest <name>"); else txTest(t[1].c_str()); return; }
     if (c == "txcal") {
-        Serial.printf("tx mode: %s; bit-bang carrier would be %lu Hz (target %d)\n",
-                      tx.pwm() ? "hardware PWM (38.46 kHz)" : "bit-bang", (unsigned long)tx.measureBitbangHz(), IR_CARRIER_HZ);
+        Serial.printf("tx mode: %s; bit-bang carrier would be %lu Hz (target %d); pwm start+stop overhead %lu us (compensated)\n",
+                      tx.pwm() ? "hardware PWM (38.46 kHz)" : "bit-bang", (unsigned long)tx.measureBitbangHz(), IR_CARRIER_HZ,
+                      (unsigned long)tx.pwmOverheadUs());
         return;
     }
     if (c == "txmode") {

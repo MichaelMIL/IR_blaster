@@ -172,6 +172,22 @@ void IrSender::calibrate() {
     for (int i = 0; i < 200; i++) writeAll(LOW);
     uint32_t perCall = (micros() - t0) / 200;
     _writeOverheadUs = perCall < _halfPeriodUs - 2 ? perCall : _halfPeriodUs - 2;
+
+    // Measure the PWM start/stop call cost so it can be subtracted from each
+    // mark/space (it is ~100 us on the BDK driver, which otherwise stretches
+    // every pulse). Emits a few ms of carrier; harmless.
+    bool anyPwm = false;
+    for (int i = 0; i < _count; i++) if (_pwmOk[i]) anyPwm = true;
+    _pwmOnOverheadUs = _pwmOffOverheadUs = 0;
+    if (anyPwm) {
+        uint32_t on = 0, off = 0;
+        for (int i = 0; i < 20; i++) {
+            uint32_t a = micros(); pinsCarrier(true);  uint32_t b = micros(); pinsCarrier(false); uint32_t c = micros();
+            on += b - a; off += c - b;
+        }
+        _pwmOnOverheadUs = on / 20;
+        _pwmOffOverheadUs = off / 20;
+    }
 }
 
 uint32_t IrSender::measureBitbangHz() {
@@ -212,6 +228,9 @@ void IrSender::mark(uint32_t us) {
     for (int i = 0; i < _count; i++) if (!_pwmOk[i]) anyBitbang = true;
     pinsCarrier(true);
     if (!anyBitbang) {
+        // the stop call at the end of this mark also counts towards it
+        uint32_t ovh = _pwmOnOverheadUs + _pwmOffOverheadUs;
+        us = us > ovh + 20 ? us - ovh : 20;
         while (us > 10000) { delayMicroseconds(10000); us -= 10000; }
         delayMicroseconds(us);
     } else {
@@ -229,6 +248,8 @@ void IrSender::mark(uint32_t us) {
 
 void IrSender::space(uint32_t us) {
     writeAll(LOW);
+    // the start call of the next mark lands inside this space
+    us = us > _pwmOnOverheadUs + 20 ? us - _pwmOnOverheadUs : 20;
     while (us > 10000) { delayMicroseconds(10000); us -= 10000; }
     delayMicroseconds(us);
 }
