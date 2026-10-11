@@ -66,42 +66,64 @@ Lessons from the first flash:
 
 ## Pin mapping
 
-Defaults in `platformio.ini`:
+Pins are assigned at runtime from the serial console and stored in flash
+(first 4 KiB of the `userdata` partition). Defaults come from `platformio.ini`
+(`IR_TX_PIN` = LED 1, `IR_RX_PIN` = receiver). `reset` restores them.
 
-| Define        | GPIO | Role                              |
-|---------------|------|-----------------------------------|
-| `IR_TX_PIN`   | P26  | drives the transistor for the LEDs |
-| `IR_RX_PIN`   | P8   | output of the IR receiver          |
+Candidate GPIOs on the CB3S: P6 P7 P8 P9 P14 P20 P21 P22 P23 P24 P26.
+P10/P11 are the serial console and are refused.
 
-These are the most common Tuya IR-blaster assignments, but brands differ.
-If nothing is received, trace the receiver's OUT pin to the CB3S pad and
-change the define. Common alternatives: RX on P7, P9 or P24; TX on P7 or P24.
-
-CB3S pad to BK7231N GPIO reference:
+### Finding the pins (test mode)
 
 ```
-P6  P7  P8  P9  P14 P16 P17 P20 P21 P22 P23 P24 P26 P28  ADC3  CEN
-TX1 RX1 = P11 / P10    TX2 RX2 = P0 / P1
+rx scan 10          # press remote buttons at the device; reports which GPIO toggles
+rx pin P7           # assign it
+rx test 15          # live readings: edges/s, decoded NEC frames, idle level
+led scan 2          # each candidate GPIO blinks for 2 s - watch LEDs through a phone camera
+led 1 pin P26       # assign the LED that blinked (repeat for led 2 / led 3)
+led 1 test 3        # blink only LED 1 for 3 s
+led all test        # blink all configured LEDs
 ```
+
+A working receiver idles HIGH. `rx test` printing `idle level: LOW` and
+`0 edges/s` means that GPIO is not the receiver output. If the three LEDs are
+driven by one transistor, only one GPIO will blink them all; leave the other two
+as `none`.
+
+## WiFi
+
+```
+wifi ssid My Network      # spaces allowed
+wifi pass hunter2
+wifi connect              # also auto-connects at every boot once saved
+wifi status               # ip, rssi
+wifi clear
+```
+
+Hostname is `ir-blaster`. Nothing listens on the network yet; the next step is
+an HTTP or MQTT endpoint for `send`.
 
 ## Serial commands
 
 ```
-send <addr> <cmd>      NEC with standard inverse bytes, e.g. send 0x04 0x08
-raw  <hex32>           full 32-bit NEC word as printed by the receiver
-help
+status                     firmware / wifi / pin summary
+send <addr> <cmd>          NEC with inverse bytes on all configured LEDs, e.g. send 0x04 0x08
+raw <hex32>                full 32-bit NEC word as printed by the receiver
+led <1-3> pin <P#|none>    led <1-3> test [sec]   led all test [sec]   led scan [sec]
+rx pin <P#|none>           rx test [sec]          rx scan [sec]
+reset                      reboot                 help
 ```
 
-Point any NEC remote (most TVs, set-top boxes, LED strips) at the blaster and
-it prints lines like:
+Every received frame is printed as it arrives:
 
 ```
 RX NEC addr=0x04 cmd=0x08 raw=0xF708FB04
+RX raw 36 pulses (not NEC)         <- another protocol; still proves the pin
 ```
 
 ## Next steps
 
-- WiFi + MQTT (LibreTiny ships `WiFi.h`; PubSubClient works)
+- HTTP / MQTT endpoint so Home Assistant can call `send`
 - Add more protocols (Samsung, Sony SIRC, RC5, raw timing capture/replay)
 - OTA updates via `ArduinoOTA` or the LibreTiny OTA helper
 

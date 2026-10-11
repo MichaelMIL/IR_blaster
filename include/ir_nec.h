@@ -1,54 +1,75 @@
-// Small, dependency-free NEC IR encoder/decoder for LibreTiny (BK7231N).
+// Dependency-free IR capture + NEC encoder/decoder for LibreTiny (BK7231N).
 //
-// The receiver is interrupt driven: every edge on the RX pin is timestamped
-// and pushed into a ring buffer, which loop() drains and decodes.
-// The sender bit-bangs a carrier with digitalWrite()/delayMicroseconds().
+// Receiver: interrupt driven. Every edge on the RX pin is timestamped into a
+// ring buffer; a frame ends on >20 ms of silence or when the buffer is full.
+// Frames are decoded as NEC when possible, otherwise exposed as raw timings.
+//
+// Sender: bit-bangs a carrier on up to 3 GPIOs at once.
 
 #pragma once
 #include <Arduino.h>
 
-struct IrNecFrame {
-    uint8_t  address;   // 8-bit address (low byte for extended NEC)
+struct IrFrame {
+    bool     decoded;   // true if a valid NEC frame
+    bool     repeat;    // NEC repeat code
+    bool     extended;  // address byte not followed by its inverse
+    uint8_t  address;
     uint8_t  command;
-    uint32_t raw;       // full 32-bit word as transmitted, LSB first
-    bool     extended;  // address byte was not followed by its inverse
-    bool     repeat;    // NEC repeat code (9ms mark, 2.25ms space)
+    uint32_t raw;       // 32-bit NEC word, LSB first
+    int      pulses;    // number of raw timings captured
 };
 
-class IrNecReceiver {
+class IrReceiver {
 public:
-    explicit IrNecReceiver(uint8_t pin) : _pin(pin) {}
-    void begin();
-    bool poll(IrNecFrame &out);
+    static constexpr int MAX_EDGES = 120;
+
+    void begin(uint8_t pin);
+    void end();
+    bool active() const { return _pin != 255; }
+    uint8_t pin() const { return _pin; }
+
+    bool poll(IrFrame &out);                       // true when a frame is ready
+    int  copyPulses(uint32_t *dst, int max) const; // raw timings of last frame (µs)
+    uint32_t edgeCount() const { return _totalEdges; }
 
 private:
     static void isrTrampoline();
     void onEdge();
-    bool decode(IrNecFrame &out);
+    bool decodeNec(IrFrame &out) const;
 
-    static IrNecReceiver *_instance;
-    uint8_t _pin;
-
-    static constexpr int MAX_EDGES = 80;
-    volatile uint32_t _edges[MAX_EDGES];   // duration of each pulse/gap in µs
+    static IrReceiver *_instance;
+    uint8_t _pin = 255;
+    volatile uint32_t _edges[MAX_EDGES];
     volatile int      _count = 0;
     volatile uint32_t _lastEdge = 0;
     volatile bool     _frameReady = false;
+    volatile uint32_t _totalEdges = 0;
 };
 
-class IrNecSender {
+class IrSender {
 public:
-    IrNecSender(uint8_t pin, uint32_t carrierHz) : _pin(pin), _carrierHz(carrierHz) {}
-    void begin();
+    static constexpr int MAX_PINS = 3;
+
+    void setPins(const uint8_t *pins, int count);
+    void setCarrier(uint32_t hz);
+    int  pinCount() const { return _count; }
+
     void sendNec(uint8_t address, uint8_t command);
     void sendNecRaw(uint32_t word);
     void sendRepeat();
 
+    // Carrier burst for testing: `onMs` of carrier, `offMs` of silence, repeated.
+    void burst(uint32_t onMs, uint32_t offMs, uint32_t totalMs);
+
 private:
     void mark(uint32_t us);
     void space(uint32_t us);
+    void writeAll(int level);
+    void calibrate();
 
-    uint8_t  _pin;
-    uint32_t _carrierHz;
+    uint8_t  _pins[MAX_PINS];
+    int      _count = 0;
+    uint32_t _carrierHz = 38000;
     uint32_t _halfPeriodUs = 13;
+    uint32_t _writeOverheadUs = 0;
 };
