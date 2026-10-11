@@ -202,9 +202,17 @@ static bool parsePinArg(const String &s, uint8_t &out) {
 
 // ----------------------------------------------------------------- handlers
 
-static void handleRoot() {
-    server.send_P(200, "text/html", INDEX_HTML);
+// Large responses must go out in small pieces: a single multi-KB lwip_send in
+// non-blocking mode fails on this port and the client gets 0 bytes.
+static void sendPage(const char *html) {
+    size_t len = strlen(html);
+    server.setContentLength(len);
+    server.send(200, "text/html", "");
+    for (size_t off = 0; off < len; off += 1024)
+        server.sendContent(html + off, (len - off) < 1024 ? (len - off) : 1024);
 }
+
+static void handleRoot() { sendPage(INDEX_HTML); }
 
 static void handleStatus() {
     String j = "{";
@@ -481,7 +489,7 @@ void webBegin() {
     server.on("/api/export", HTTP_GET, handleExport);
     server.on("/api/last", HTTP_GET, handleLast);
     server.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
-    server.on("/remote", HTTP_GET, []() { server.send_P(200, "text/html", REMOTE_HTML); });
+    server.on("/remote", HTTP_GET, []() { sendPage(REMOTE_HTML); });
     server.on("/api/buttons", HTTP_GET, handleButtons);
     server.on("/api/buttons/set", HTTP_POST, handleButtonSet);
     server.on("/api/buttons/delete", HTTP_POST, []() { if (btnDelete(server.arg("id").toInt())) ok("deleted"); else fail(404, "no such button"); });
