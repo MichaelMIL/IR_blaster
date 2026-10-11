@@ -209,6 +209,19 @@ pulses but the trailing space, with a mean error below ~100 µs.
 Receiver dropouts (a mark or space shorter than 250 µs) are merged when a
 recording is saved and again when it is played, so older recordings are fine.
 
+## Remote page for everyday use
+
+`http://ir-blaster.local/remote` is a plain grid of big buttons, phone-friendly,
+with no settings on it. Buttons are defined on the admin page (`/`) under
+**Remote buttons**: a label plus either a NEC address/command or a recording
+name, optionally repeated 2-3 times. "Fill from last received NEC" copies the
+code of the last frame the receiver saw. Up to 24 buttons, stored in flash.
+
+API: `GET /api/buttons`, `POST /api/button?id=N` (press),
+`POST /api/buttons/set?label=&type=nec&addr=&cmd=&repeat=` or
+`type=rec&rec=<name>`, `POST /api/buttons/move?id=&dir=-1|1`,
+`POST /api/buttons/delete?id=`.
+
 ## Web page
 
 Once on WiFi: `http://ir-blaster.local/` (or the IP printed on the console).

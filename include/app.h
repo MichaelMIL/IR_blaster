@@ -43,6 +43,8 @@ bool   appPlay(const char *name, String &msg);
 int    appLastPulses();
 const uint32_t *appLastCapture();
 
+bool appPressButton(int i, String &msg);
+
 // Status LED
 void appStatusBlink(uint32_t ms);
 void appApplyStatusLed();

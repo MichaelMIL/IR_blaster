@@ -9,6 +9,7 @@
 #include "ir_nec.h"
 #include "app.h"
 #include "recordings.h"
+#include "buttons.h"
 
 #ifndef IR_CARRIER_HZ
 #define IR_CARRIER_HZ 38000
@@ -458,6 +459,23 @@ static void txTest(const char *name, int necAddr = -1, int necCmd = -1) {
     if (!got) Serial.println("  nothing received back: no reflection reaching the receiver, or the LED is not on this pin");
 }
 
+bool appPressButton(int i, String &msg) {
+    const Button *b = btnGet(i);
+    if (!b) { msg = "no such button"; return false; }
+    bool ok = true;
+    for (int r = 0; r < b->repeat && ok; r++) {
+        if (r) delay(40);
+        if (b->type == BTN_NEC) {
+            ok = appSendNec(b->addr, b->cmd);
+            if (!ok) msg = "no LED pins assigned";
+        } else {
+            ok = appPlay(b->rec, msg);
+        }
+    }
+    if (ok) msg = String(b->label) + " sent";
+    return ok;
+}
+
 static void listRecordings() {
     RecInfo info[REC_SLOTS];
     int n = recList(info, REC_SLOTS);
@@ -690,6 +708,7 @@ void setup() {
     Serial.println();
     Serial.println("=== IR blaster (CB3S / BK7231N) ===");
     cfg.load();
+    btnLoad();
     appApplyStatusLed();
     for (int i = 0; i < 3; i++) { statusWrite(true); delay(100); statusWrite(false); delay(100); }
     applyTxPins();

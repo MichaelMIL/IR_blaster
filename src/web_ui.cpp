@@ -6,6 +6,7 @@
 #include "app.h"
 #include "config.h"
 #include "recordings.h"
+#include "buttons.h"
 
 static WebServer server(80);
 static mDNS      mdns;
@@ -34,7 +35,7 @@ code{font-family:ui-monospace,Menlo,monospace;background:#0c0e12;padding:1px 5px
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--bad);margin-right:6px}.dot.on{background:var(--ok)}
 .wide{grid-column:1/-1}
 </style></head><body>
-<header><h1>IR Blaster <span style="color:var(--mute);font-weight:400">CB3S</span></h1><div id="net">connecting…</div></header>
+<header><h1>IR Blaster <span style="color:var(--mute);font-weight:400">CB3S</span> <a href="/remote" style="color:var(--acc);font-size:13px;font-weight:400;margin-left:10px">open remote page →</a></h1><div id="net">connecting…</div></header>
 <main>
 <section><h2>Send</h2>
  <div class="grid"><div><label>Address</label><input id="addr" placeholder="0x04"></div><div><label>Command</label><input id="cmd" placeholder="0x08"></div></div>
@@ -56,6 +57,19 @@ code{font-family:ui-monospace,Menlo,monospace;background:#0c0e12;padding:1px 5px
  </div>
  <div class="row" style="margin-top:12px"><button onclick="savePins()">Save pins</button><button class="sec" onclick="test('all')">Test all LEDs</button><button class="sec" id="ledscan" onclick="ledScan()">Find LEDs (blink each GPIO)</button><button class="sec" id="rxscan" onclick="rxScan()">Find receiver (10 s)</button></div>
  <div id="log"></div>
+</section>
+<section class="wide"><h2>Remote buttons <span style="text-transform:none;letter-spacing:0;color:var(--mute)">(shown on <a href="/remote" style="color:var(--acc)">/remote</a>)</span></h2>
+ <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+  <div><label>Label</label><input id="blabel" placeholder="AC on" maxlength="16"></div>
+  <div><label>Action</label><select id="btype" onchange="btype()"><option value="nec">NEC code</option><option value="rec">Recording</option></select></div>
+  <div id="bnec1"><label>Address</label><input id="baddr" placeholder="0xBA"></div>
+  <div id="bnec2"><label>Command</label><input id="bcmd" placeholder="0x1E"></div>
+  <div id="brec" style="display:none"><label>Recording</label><select id="brecsel"></select></div>
+  <div><label>Repeat</label><select id="brep"><option>1</option><option>2</option><option>3</option></select></div>
+ </div>
+ <div class="row" style="margin-top:10px"><button onclick="addBtn()">Add button</button><button class="sec" onclick="fromLast()">Fill from last received NEC</button></div>
+ <table style="margin-top:12px"><thead><tr><th>#</th><th>label</th><th>action</th><th></th></tr></thead><tbody id="btns"><tr><td colspan="4" style="color:var(--mute)">no buttons yet</td></tr></tbody></table>
+ <div id="btnmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
 </section>
 <section class="wide"><h2>Recordings <span style="text-transform:none;letter-spacing:0;color:var(--mute)">(any remote, e.g. air conditioner)</span></h2>
  <div class="row"><div><label>Name</label><input id="recname" placeholder="ac_cool_24"></div><button onclick="record()" id="recbtn">Record next key press</button><button class="sec" onclick="saveLast()">Save last received</button></div>
@@ -91,11 +105,18 @@ async function status(){const s=await api('/api/status');cands=s.candidates;
  if(!$('ssid').value)$('ssid').value=s.ssid||'';
  $('st').innerHTML=Object.entries({firmware:s.firmware,uptime:s.uptime+' s',ip:s.ip,hostname:s.hostname+'.local',rssi:s.rssi+' dBm',carrier:s.carrier+' Hz',rx_idle:s.rx_idle}).map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join('')}
 async function poll(){try{const r=await api('/api/received');if(r.seq===lastSeq)return;lastSeq=r.seq;$('rxcount').textContent=r.frames.length?`(${r.frames.length})`:'';
- const now=r.now;$('rx').innerHTML=r.frames.length?r.frames.slice().reverse().map(f=>`<tr><td>${Math.round((now-f.t)/1000)}s</td><td>${f.type}</td><td>${f.type==='nec'?hex(f.addr,2):''}</td><td>${f.type==='nec'?hex(f.cmd,2):''}</td><td>${f.type==='nec'?'<code>'+hex(f.raw,8)+'</code>':f.pulses+' pulses (raw)'}</td><td>${f.type==='nec'?`<button class="sec" onclick="api('/api/send',{m:'POST',q:{raw:'${hex(f.raw,8)}'}})">send</button>`:(f===r.frames[r.frames.length-1]?`<button class="sec" onclick="saveNewest()">save…</button>`:'')}</td></tr>`).join(''):'<tr><td colspan="6" style="color:var(--mute)">nothing received yet</td></tr>'}catch(e){}}
+ const necs=r.frames.filter(f=>f.type==='nec');if(necs.length)lastNec=necs[necs.length-1];const now=r.now;$('rx').innerHTML=r.frames.length?r.frames.slice().reverse().map(f=>`<tr><td>${Math.round((now-f.t)/1000)}s</td><td>${f.type}</td><td>${f.type==='nec'?hex(f.addr,2):''}</td><td>${f.type==='nec'?hex(f.cmd,2):''}</td><td>${f.type==='nec'?'<code>'+hex(f.raw,8)+'</code>':f.pulses+' pulses (raw)'}</td><td>${f.type==='nec'?`<button class="sec" onclick="api('/api/send',{m:'POST',q:{raw:'${hex(f.raw,8)}'}})">send</button>`:(f===r.frames[r.frames.length-1]?`<button class="sec" onclick="saveNewest()">save…</button>`:'')}</td></tr>`).join(''):'<tr><td colspan="6" style="color:var(--mute)">nothing received yet</td></tr>'}catch(e){}}
 async function sendNec(){try{const r=await api('/api/send',{m:'POST',q:{addr:$('addr').value,cmd:$('cmd').value}});$('txmsg').textContent=r.message}catch(e){$('txmsg').textContent='error: '+e.message}}
 async function sendRaw(){try{const r=await api('/api/send',{m:'POST',q:{raw:$('raw').value}});$('txmsg').textContent=r.message}catch(e){$('txmsg').textContent='error: '+e.message}}
 async function savePins(){const r=await api('/api/pins',{m:'POST',q:{led1:$('led1').value,led2:$('led2').value,led3:$('led3').value,rx:$('rx_pin').value,status:$('sled').value,status_invert:$('sinv').checked?1:0}});log(r.message);status()}
-async function recs(){try{const r=await api('/api/recordings');$('recs').innerHTML=r.length?r.map(x=>`<tr><td><code>${x.name}</code></td><td>${x.pulses}</td><td>${x.ms} ms</td><td style="text-align:right"><button onclick="play('${x.name}')">Play</button> <button class="sec" onclick="if(confirm('Delete ${x.name}?'))api('/api/recordings/delete',{m:'POST',q:{name:'${x.name}'}}).then(recs)">Delete</button></td></tr>`).join(''):'<tr><td colspan="4" style="color:var(--mute)">no recordings yet</td></tr>'}catch(e){}}
+function btype(){const rec=$('btype').value==='rec';$('bnec1').style.display=$('bnec2').style.display=rec?'none':'';$('brec').style.display=rec?'':'none'}
+let lastNec=null;
+async function btns(){try{const r=await api('/api/buttons');$('btns').innerHTML=r.length?r.map((b,i)=>`<tr><td>${i+1}</td><td>${b.label}</td><td>${b.type==='nec'?'NEC '+hex(b.addr,2)+' / '+hex(b.cmd,2):'rec <code>'+b.rec+'</code>'}${b.repeat>1?' ×'+b.repeat:''}</td><td style="text-align:right"><button class="sec" onclick="api('/api/button',{m:'POST',q:{id:${i}}}).then(r=>log(r.message))">Test</button> <button class="sec" onclick="api('/api/buttons/move',{m:'POST',q:{id:${i},dir:-1}}).then(btns)">↑</button> <button class="sec" onclick="api('/api/buttons/move',{m:'POST',q:{id:${i},dir:1}}).then(btns)">↓</button> <button class="sec" onclick="if(confirm('Delete ${b.label}?'))api('/api/buttons/delete',{m:'POST',q:{id:${i}}}).then(btns)">Delete</button></td></tr>`).join(''):'<tr><td colspan="4" style="color:var(--mute)">no buttons yet</td></tr>'}catch(e){}}
+async function addBtn(){const q={label:$('blabel').value.trim(),type:$('btype').value,repeat:$('brep').value};if(!q.label)return $('btnmsg').textContent='enter a label';
+ if(q.type==='nec'){q.addr=$('baddr').value;q.cmd=$('bcmd').value}else q.rec=$('brecsel').value;
+ try{const r=await api('/api/buttons/set',{m:'POST',q});$('btnmsg').textContent=r.message;$('blabel').value='';btns()}catch(e){$('btnmsg').textContent='error: '+e.message}}
+function fromLast(){if(!lastNec)return $('btnmsg').textContent='no NEC frame received yet - press the remote at the device first';$('btype').value='nec';btype();$('baddr').value=hex(lastNec.addr,2);$('bcmd').value=hex(lastNec.cmd,2);$('btnmsg').textContent='filled from last received frame'}
+async function recs(){try{const r=await api('/api/recordings');$('brecsel').innerHTML=r.map(x=>`<option>${x.name}</option>`).join('');$('recs').innerHTML=r.length?r.map(x=>`<tr><td><code>${x.name}</code></td><td>${x.pulses}</td><td>${x.ms} ms</td><td style="text-align:right"><button onclick="play('${x.name}')">Play</button> <button class="sec" onclick="if(confirm('Delete ${x.name}?'))api('/api/recordings/delete',{m:'POST',q:{name:'${x.name}'}}).then(recs)">Delete</button></td></tr>`).join(''):'<tr><td colspan="4" style="color:var(--mute)">no recordings yet</td></tr>'}catch(e){}}
 async function record(){const n=$('recname').value.trim();if(!n)return $('recmsg').textContent='enter a name first';const b=$('recbtn');b.disabled=true;$('recmsg').textContent=`recording '${n}': press the key on the remote now (15 s)…`;
  try{const r=await api('/api/record',{m:'POST',q:{name:n,sec:15}});$('recmsg').textContent=r.message}catch(e){$('recmsg').textContent='error: '+e.message}b.disabled=false;recs()}
 async function saveNewest(){const n=prompt('Name for this recording (no spaces):');if(!n)return;try{const r=await api('/api/record/last',{m:'POST',q:{name:n.trim()}});$('recmsg').textContent=r.message;recs()}catch(e){alert(e.message)}}
@@ -112,7 +133,37 @@ async function copyLast(){try{const r=await api('/api/last');if(!r.pulses)return
 async function ota(){const f=$('fw').files[0];if(!f)return $('otamsg').textContent='choose a .uf2 file first';const b=$('otabtn');b.disabled=true;$('otamsg').textContent=`uploading ${f.name} (${Math.round(f.size/1024)} KB)…`;
  const fd=new FormData();fd.append('file',f);try{const r=await fetch('/update',{method:'POST',body:fd});const j=await r.json();$('otamsg').textContent=j.message+(j.ok?' — reload this page in ~15 s':'')}catch(e){$('otamsg').textContent='upload ended: '+e.message+' (device may be rebooting)'}b.disabled=false}
 async function saveWifi(){const r=await api('/api/wifi',{m:'POST',q:{ssid:$('ssid').value,pass:$('pass').value}});log(r.message)}
-status();poll();recs();setInterval(poll,1500);setInterval(status,5000);
+status();poll();recs();btns();setInterval(poll,1500);setInterval(status,5000);
+</script></body></html>
+)HTML";
+
+static const char REMOTE_HTML[] = R"HTML(<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Remote</title><meta name="theme-color" content="#0f1115">
+<style>
+:root{--bg:#0f1115;--card:#1b1f27;--line:#2a2f3a;--fg:#e6e8ec;--mute:#8b92a1;--acc:#4f8cff;--ok:#3ddc84;--bad:#ff5c5c}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+header{padding:14px 18px;display:flex;justify-content:space-between;align-items:center}h1{font-size:18px;margin:0}
+header a{color:var(--mute);font-size:13px;text-decoration:none}
+main{max-width:520px;margin:0 auto;padding:8px 14px 40px;display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+button{padding:22px 10px;border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--fg);font:inherit;font-weight:600;cursor:pointer;min-height:76px;transition:transform .08s,background .15s;user-select:none}
+button:active{transform:scale(.96);background:#262c38}button.ok{background:#1d3b2c;border-color:var(--ok)}button.bad{background:#3b1d1d;border-color:var(--bad)}
+.empty{grid-column:1/-1;color:var(--mute);text-align:center;padding:40px 10px;font-size:15px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#262c38;padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
+</style></head><body>
+<header><h1 id="title">Remote</h1><a href="/">settings</a></header>
+<main id="grid"><div class="empty">loading…</div></main>
+<div id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);let toastT;
+function toast(m,bad){const t=$('toast');t.textContent=m;t.style.opacity=1;t.style.borderLeft=bad?'3px solid #ff5c5c':'3px solid #3ddc84';clearTimeout(toastT);toastT=setTimeout(()=>t.style.opacity=0,1500)}
+async function load(){try{const r=await (await fetch('/api/buttons')).json();const g=$('grid');
+ if(!r.length){g.innerHTML='<div class="empty">No buttons yet.<br>Add some under <a href="/" style="color:#4f8cff">settings</a>.</div>';return}
+ g.innerHTML=r.map((b,i)=>`<button data-i="${i}">${b.label.replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</button>`).join('');
+ g.querySelectorAll('button').forEach(el=>el.addEventListener('click',()=>press(el)))}catch(e){$('grid').innerHTML='<div class="empty">device unreachable</div>'}}
+async function press(el){if(el.disabled)return;el.disabled=true;try{const r=await fetch('/api/button?id='+el.dataset.i,{method:'POST'});const j=await r.json();el.classList.add(j.ok?'ok':'bad');toast(j.message,!j.ok)}catch(e){el.classList.add('bad');toast('no response',true)}
+ setTimeout(()=>{el.classList.remove('ok','bad');el.disabled=false},350)}
+load();
 </script></body></html>
 )HTML";
 
@@ -368,6 +419,44 @@ static void handleUpdateUpload() {
     }
 }
 
+// ---- remote buttons
+static void handleButtons() {
+    String j = "[";
+    for (int i = 0; i < btnCount(); i++) {
+        const Button *b = btnGet(i);
+        j += "{\"label\":" + jsonStr(b->label) + ",\"type\":\"" + (b->type == BTN_NEC ? "nec" : "rec") + "\"" +
+             ",\"addr\":" + String(b->addr) + ",\"cmd\":" + String(b->cmd) + ",\"rec\":" + jsonStr(b->rec) +
+             ",\"repeat\":" + String(b->repeat) + "}" + (i + 1 < btnCount() ? "," : "");
+    }
+    server.send(200, "application/json", j + "]");
+}
+
+static void handleButtonSet() {
+    Button b = {};
+    String label = server.arg("label"); label.trim();
+    if (!label.length()) return fail(400, "label required");
+    strncpy(b.label, label.c_str(), BTN_LABEL_LEN);
+    b.repeat = server.arg("repeat").toInt(); if (b.repeat < 1) b.repeat = 1;
+    if (server.arg("type") == "rec") {
+        b.type = BTN_REC;
+        if (recFind(server.arg("rec").c_str()) < 0) return fail(400, "no such recording");
+        strncpy(b.rec, server.arg("rec").c_str(), BTN_REC_LEN);
+    } else {
+        unsigned a, c;
+        if (sscanf(server.arg("addr").c_str(), "%i", &a) != 1 || sscanf(server.arg("cmd").c_str(), "%i", &c) != 1)
+            return fail(400, "addr and cmd required, e.g. 0xBA 0x1E");
+        b.type = BTN_NEC; b.addr = a & 0xFF; b.cmd = c & 0xFF;
+    }
+    int id = server.hasArg("id") ? server.arg("id").toInt() : btnCount();
+    if (!btnSet(id, b)) return fail(400, "could not save (max 24 buttons)");
+    ok("button '" + label + "' saved");
+}
+
+static void handleButtonPress() {
+    String msg;
+    if (appPressButton(server.arg("id").toInt(), msg)) ok(msg); else fail(400, msg);
+}
+
 static void handleReboot() {
     ok("rebooting");
     delay(200);
@@ -392,6 +481,12 @@ void webBegin() {
     server.on("/api/export", HTTP_GET, handleExport);
     server.on("/api/last", HTTP_GET, handleLast);
     server.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
+    server.on("/remote", HTTP_GET, []() { server.send_P(200, "text/html", REMOTE_HTML); });
+    server.on("/api/buttons", HTTP_GET, handleButtons);
+    server.on("/api/buttons/set", HTTP_POST, handleButtonSet);
+    server.on("/api/buttons/delete", HTTP_POST, []() { if (btnDelete(server.arg("id").toInt())) ok("deleted"); else fail(404, "no such button"); });
+    server.on("/api/buttons/move", HTTP_POST, []() { if (btnMove(server.arg("id").toInt(), server.arg("dir").toInt() < 0 ? -1 : 1)) ok("moved"); else fail(400, "cannot move"); });
+    server.on("/api/button", HTTP_POST, handleButtonPress);
     server.on("/api/recordings", HTTP_GET, handleRecordings);
     server.on("/api/record", HTTP_POST, handleRecord);
     server.on("/api/record/last", HTTP_POST, handleRecordLast);
