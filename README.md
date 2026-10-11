@@ -103,14 +103,13 @@ RX NEC addr=0x04 cmd=0x08 raw=0xF708FB04
 
 ## Toolchain notes (this machine)
 
-- LibreTiny 1.13.0 does **not** work with PlatformIO Core 6.2.0
-  (`TypeError: Library.__post_init__() missing 1 required positional argument: 'env'`).
-  The VS Code extension's core (`~/.platformio/penv`) is pinned to 6.1.19.
-  If the extension auto-upgrades it, downgrade again:
-  `~/.platformio/penv/bin/pip install "platformio==6.1.19"`.
+- LibreTiny 1.13.0 fails on PlatformIO Core 6.2.0 with
+  `TypeError: Library.__post_init__() missing 1 required positional argument: 'env'`.
+  The VS Code extension forces core 6.2.0 (it re-upgrades on every restart), so
+  `~/.platformio/platforms/libretiny/builder/utils/libs-queue.py` is patched locally:
+  `Library.env` is a plain dataclass field instead of an `InitVar`. The original is
+  kept next to it as `libs-queue.py.orig`. Re-apply if the platform is reinstalled.
 - The PlatformIO package mirror (`sin1.contabostorage.com`) is DNS-blocked by the
-  ASUS router on the home network, so core package downloads hang and retry.
-  `tool-scons` 4.40801.0 was assembled by hand from the PyPI `SCons==4.8.1` wheel
-  into `~/.platformio/packages/tool-scons`. The newer 4.41101.0 copy is kept at
-  `~/.platformio/packages/tool-scons@4.41101.0`.
+  ASUS router on the home network, so core package downloads hang and retry
+  endlessly. Allow that host in the router, or expect "stuck" installs.
 - Flashing helper (`ltchiptool`) lives in `~/.platformio/penv/bin/ltchiptool`.
