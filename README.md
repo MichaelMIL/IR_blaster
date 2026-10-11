@@ -36,29 +36,33 @@ Notes:
 
 ## Flash
 
-1. Plug in the adapter and find the port:
+1. Plug in the adapter and find the port (the name changes with the USB socket):
    ```sh
-   ls /dev/cu.*
+   ls /dev/cu.usbserial*
    ```
-2. Put the port into `platformio.ini` (`upload_port = /dev/cu.usbserial-XXXX`)
-   or pass it on the command line.
-3. Start the upload, then power-cycle the module (unplug/replug 3V3 or short
-   CEN/RST to GND briefly) while the flasher is waiting for the bootloader:
+2. Flash at 115200 baud. The default 921600 died mid-write on this wiring.
+   ```sh
+   ~/.platformio/penv/bin/ltchiptool flash write -d /dev/cu.usbserial-XXXX -b 115200 -t 150 .pio/build/cb3s/firmware.uf2
+   ```
+   or, via PlatformIO (uses `upload_speed` / `upload_port` from `platformio.ini`):
    ```sh
    pio run -t upload --upload-port /dev/cu.usbserial-XXXX
    ```
-   LibreTiny retries for several seconds, so the reset just has to happen
-   while it is polling.
+3. The first time (stock Tuya firmware) the chip must be reset while the
+   flasher polls: short CEN to GND for half a second, or drop the module's 3V3.
+   Once this firmware is on the chip, `Serial` lives on UART1 and LibreTiny's
+   auto-download-reboot kicks the chip into the bootloader by itself.
 4. Open the monitor:
    ```sh
    pio device monitor -b 115200
    ```
 
-Before the first flash it is worth backing up the stock firmware:
-
-```sh
-pio pkg exec -- ltchiptool flash read -d /dev/cu.usbserial-XXXX -b 2000000 stock_backup.bin
-```
+Lessons from the first flash:
+- Power the blaster from its own USB cable, not from the adapter's 3.3 V pin.
+  The module's boot inrush reset the USB-serial chip and the port vanished.
+- Keep the USB adapter plugged in; reset only the module.
+- `Serial` on BK72xx defaults to UART2 (TX2/RX2). `-D LT_UART_DEFAULT_PORT=1`
+  in `platformio.ini` moves it to UART1 so the flash pads double as console.
 
 ## Pin mapping
 
