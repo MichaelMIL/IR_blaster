@@ -24,6 +24,7 @@ struct IrFrame {
 class IrReceiver {
 public:
     static constexpr int MAX_EDGES = 800;   // enough for multi-part AC frames
+    static constexpr int MIN_PULSES = 6;    // shorter captures are ambient-light glitches
 
     void begin(uint8_t pin);
     void end();
@@ -33,6 +34,7 @@ public:
     // true when a frame is ready; optionally copies its raw timings (µs, mark first)
     bool poll(IrFrame &out, uint32_t *timings = nullptr, int max = 0);
     uint32_t edgeCount() const { return _totalEdges; }
+    uint32_t noiseCount() const { return _noise; }   // glitch frames dropped
 
 private:
     static void isrTrampoline();
@@ -46,6 +48,7 @@ private:
     volatile uint32_t _lastEdge = 0;
     volatile bool     _frameReady = false;
     volatile uint32_t _totalEdges = 0;
+    uint32_t _noise = 0;
 };
 
 class IrSender {

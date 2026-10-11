@@ -264,6 +264,7 @@ static void rxTest(uint32_t seconds) {
     uint32_t end = millis() + seconds * 1000;
     uint32_t nextTick = millis() + 1000;
     uint32_t lastEdges = rx.edgeCount();
+    uint32_t lastNoise = rx.noiseCount();
     uint32_t pulses[IrReceiver::MAX_EDGES];
     while ((int32_t)(millis() - end) < 0) {
         IrFrame f;
@@ -272,8 +273,10 @@ static void rxTest(uint32_t seconds) {
         if ((int32_t)(millis() - nextTick) >= 0) {
             nextTick += 1000;
             uint32_t e = rx.edgeCount();
-            Serial.printf("   activity: %lu edges/s\n", (unsigned long)(e - lastEdges));
-            lastEdges = e;
+            uint32_t nz = rx.noiseCount();
+            Serial.printf("   activity: %lu edges/s%s\n", (unsigned long)(e - lastEdges),
+                          nz != lastNoise ? " (glitches ignored)" : "");
+            lastEdges = e; lastNoise = nz;
         }
         if (Serial.available() && Serial.read() == 'q') break;
         delay(1);

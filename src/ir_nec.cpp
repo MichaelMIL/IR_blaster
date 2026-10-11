@@ -65,6 +65,12 @@ bool IrReceiver::poll(IrFrame &out, uint32_t *timings, int max) {
         _frameReady = true;
     }
     if (!_frameReady) return false;
+    if (_count < MIN_PULSES) {            // glitch: discard silently
+        _noise++;
+        _count = 0;
+        _frameReady = false;
+        return false;
+    }
 
     out = IrFrame{};
     out.pulses  = _count;
