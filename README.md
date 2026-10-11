@@ -207,6 +207,32 @@ On macOS use the system `python3` (`/usr/bin/python3`): other Python builds
 allow them under System Settings → Privacy & Security → Local Network, and
 fail with "No route to host".
 
+## Key mapper GUI (PC side)
+
+`tools/ir_mapper.py` is a local web app for mapping a remote key by key:
+
+```sh
+/usr/bin/python3 tools/ir_mapper.py --host ir-blaster.local --session ac_map.json
+```
+
+It opens `http://127.0.0.1:8765/`, follows the device's capture stream and
+lists every frame as it arrives, with its decode and LSB-first bytes. Then:
+
+- **Tag** each capture: click a preset chip (power, cool, heat, temp_up, …)
+  or type a custom tag; the *next* capture gets it, or click a row first to
+  tag that one. "auto-increment" turns `cool_22` into `cool_23`, `cool_24` …
+  for sweeping a temperature range.
+- **play** a capture through the device, **to device** uploads a tagged
+  capture as a recording (so it appears on `/remote` and in Home Assistant),
+  "Upload all tagged" does them all.
+- **Compare two captures** highlights the bits that differ, which is how you
+  find the temperature / mode / checksum fields.
+- Everything is saved to the session file on every change; "Export for
+  ir_analyze.py" writes `<session>_export.json`.
+
+Device endpoint used for uploads: `POST /api/recordings/put?name=…` with the
+timings as a comma-separated body.
+
 ## RAM budget
 
 The BK7231N leaves this firmware only ~72 KB of heap after the WiFi stack.

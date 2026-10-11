@@ -381,6 +381,27 @@ static void handleRecordLast() {
     if (appSaveLast(server.arg("name").c_str(), msg)) ok(msg); else fail(400, msg);
 }
 
+// Store a recording from raw timings posted by a PC tool (body: "9000,4500,562,...").
+static void handleRecordingPut() {
+    String name = server.arg("name"); name.trim();
+    String body = server.arg("plain");
+    if (!name.length()) return fail(400, "name required");
+    uint32_t *buf = appScratch();
+    int n = 0; const char *p = body.c_str();
+    while (*p && n < REC_MAX_PULSES) {
+        while (*p == ',' || *p == ' ' || *p == '[' || *p == ']' || *p == '\n' || *p == '\r') p++;
+        if (!*p) break;
+        char *end; long v = strtol(p, &end, 10);
+        if (end == p) return fail(400, "bad timings: expected comma-separated microseconds");
+        if (v > 0) buf[n++] = (uint32_t)v;
+        p = end;
+    }
+    if (n < 3) return fail(400, "need at least 3 timings");
+    n = irCleanGlitches(buf, n);
+    if (!recSave(name.c_str(), buf, n)) return fail(400, "save failed (bad name or 32 slots full)");
+    ok("saved '" + name + "' (" + String(n) + " pulses)");
+}
+
 static void handlePlay() {
     String msg;
     if (appPlay(server.arg("name").c_str(), msg)) ok(msg); else fail(400, msg);
@@ -593,6 +614,7 @@ void webBegin() {
     server.on("/api/record", HTTP_POST, handleRecord);
     server.on("/api/record/last", HTTP_POST, handleRecordLast);
     server.on("/api/play", HTTP_POST, handlePlay);
+    server.on("/api/recordings/put", HTTP_POST, handleRecordingPut);
     server.on("/api/recordings/delete", HTTP_POST, []() { if (recErase(server.arg("name").c_str())) ok("deleted"); else fail(404, "not found"); });
     server.on("/api/sled/test", HTTP_POST, []() { for (int i = 0; i < 5; i++) { appStatusBlink(0); digitalWrite(cfg.statusPin, cfg.statusInvert ? LOW : HIGH); delay(200); digitalWrite(cfg.statusPin, cfg.statusInvert ? HIGH : LOW); delay(200); } ok("blinked status LED"); });
     server.onNotFound([]() { fail(404, "not found"); });
