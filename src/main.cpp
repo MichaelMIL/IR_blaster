@@ -25,6 +25,7 @@ static uint32_t lastCapture[IrReceiver::MAX_EDGES];
 static int      lastN = 0;
 static uint32_t playBuf[REC_MAX_PULSES];
 int appLastPulses() { return lastN; }
+const uint32_t *appLastCapture() { return lastCapture; }
 
 // Status LED
 static uint32_t statusFlashUntil = 0;
@@ -187,6 +188,7 @@ static void printHelp() {
         "  save <name>                  store the last received frame\n"
         "  play <name>                  retransmit a recording\n"
         "  list | del <name> | dump <name>\n"
+        "  export                       JSON of last capture + all recordings (also GET /api/export)\n"
         "test mode:\n"
         "  led <1-3> pin <P#|none>      assign GPIO to an IR LED\n"
         "  led <1-3> test [sec]         blink carrier on that LED only (watch via phone camera)\n"
@@ -383,6 +385,26 @@ static void listRecordings() {
         Serial.printf("%-5d %-24s %-7u %lu\n", info[i].slot, info[i].name, info[i].pulses, (unsigned long)info[i].durationMs);
 }
 
+// JSON export of everything (same format as GET /api/export)
+static void printTimingsJson(const uint32_t *t, int n) {
+    Serial.print("[");
+    for (int i = 0; i < n; i++) { Serial.print(t[i]); if (i + 1 < n) Serial.print(","); }
+    Serial.print("]");
+}
+static void exportJson() {
+    Serial.printf("{\"device\":\"ir-blaster\",\"carrier_hz\":%d,\"unit\":\"us\",\"format\":\"mark,space,mark,...\",", IR_CARRIER_HZ);
+    Serial.printf("\"last_capture\":{\"pulses\":%d,\"timings\":", lastN); printTimingsJson(lastCapture, lastN);
+    Serial.print("},\"recordings\":[");
+    RecInfo info[REC_SLOTS];
+    int n = recList(info, REC_SLOTS);
+    for (int i = 0; i < n; i++) {
+        int k = recLoad(info[i].slot, playBuf, REC_MAX_PULSES);
+        Serial.printf("{\"name\":\"%s\",\"pulses\":%d,\"timings\":", info[i].name, k); printTimingsJson(playBuf, k);
+        Serial.print(i + 1 < n ? "}," : "}");
+    }
+    Serial.println("]}");
+}
+
 static void dumpRecording(const char *name) {
     int slot = recFind(name);
     if (slot < 0) { Serial.println("not found"); return; }
@@ -456,6 +478,7 @@ static void handleCommand(const String &cmd) {
         String msg; appPlay(t[1].c_str(), msg); Serial.println(msg); return;
     }
     if (c == "list") { listRecordings(); return; }
+    if (c == "export") { exportJson(); return; }
     if (c == "fake") {                       // synthetic NEC 0x04/0x08 capture, for testing the storage path
         uint32_t w = 0x04 | (0xFB << 8) | (0x08 << 16) | (0xF7 << 24);
         int k = 0; lastCapture[k++] = 9000; lastCapture[k++] = 4500;

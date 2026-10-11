@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <mDNS.h>
+#include <Update.h>
 #include "app.h"
 #include "config.h"
 #include "recordings.h"
@@ -61,6 +62,16 @@ code{font-family:ui-monospace,Menlo,monospace;background:#0c0e12;padding:1px 5px
  <table style="margin-top:12px"><thead><tr><th>name</th><th>pulses</th><th>length</th><th></th></tr></thead><tbody id="recs"><tr><td colspan="4" style="color:var(--mute)">no recordings yet</td></tr></tbody></table>
  <div id="recmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
 </section>
+<section><h2>Export &amp; analysis</h2>
+ <p style="margin:0 0 10px;color:var(--mute);font-size:13px">Download every recording plus the last capture as JSON, then run <code>tools/ir_analyze.py ir_export.json</code> from the repo.</p>
+ <div class="row"><a href="/api/export" download="ir_export.json"><button>Download ir_export.json</button></a><button class="sec" onclick="copyLast()">Copy last capture</button></div>
+ <div id="expmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
+</section>
+<section><h2>Firmware update (OTA)</h2>
+ <p style="margin:0 0 10px;color:var(--mute);font-size:13px">Upload <code>.pio/build/cb3s/firmware.uf2</code>. The device reboots when done.</p>
+ <input type="file" id="fw" accept=".uf2"><div class="row" style="margin-top:10px"><button onclick="ota()" id="otabtn">Upload &amp; flash</button></div>
+ <div id="otamsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
+</section>
 <section><h2>WiFi</h2>
  <label>Network</label><input id="ssid"><label>Password</label><input id="pass" type="password">
  <div class="row" style="margin-top:10px"><button onclick="saveWifi()">Save &amp; connect</button><button class="sec" onclick="if(confirm('Reboot the device?'))api('/api/reboot',{m:'POST'})">Reboot</button></div>
@@ -96,6 +107,9 @@ async function ledScan(){const b=$('ledscan');b.disabled=true;log('LED scan: wat
 async function rxScan(){const b=$('rxscan');b.disabled=true;log('Receiver scan: press buttons on a remote pointed at the device for 10 s…');
  try{const r=await api('/api/scan',{m:'POST',q:{sec:10}});r.pins.filter(p=>p.transitions>0).forEach(p=>log(`  P${p.pin}: ${p.transitions} transitions, idle ${p.idle?'HIGH':'LOW'}`));
  if(r.best!=null){log(`=> receiver is most likely P${r.best}`);$('rx_pin').value=r.best}else log('=> no IR activity seen on any GPIO')}catch(e){log('error '+e.message)}b.disabled=false}
+async function copyLast(){try{const r=await api('/api/last');if(!r.pulses)return $('expmsg').textContent='nothing captured yet';await navigator.clipboard.writeText(JSON.stringify(r));$('expmsg').textContent=`copied ${r.pulses} pulses to clipboard`}catch(e){$('expmsg').textContent='error: '+e.message}}
+async function ota(){const f=$('fw').files[0];if(!f)return $('otamsg').textContent='choose a .uf2 file first';const b=$('otabtn');b.disabled=true;$('otamsg').textContent=`uploading ${f.name} (${Math.round(f.size/1024)} KB)…`;
+ const fd=new FormData();fd.append('file',f);try{const r=await fetch('/update',{method:'POST',body:fd});const j=await r.json();$('otamsg').textContent=j.message+(j.ok?' — reload this page in ~15 s':'')}catch(e){$('otamsg').textContent='upload ended: '+e.message+' (device may be rebooting)'}b.disabled=false}
 async function saveWifi(){const r=await api('/api/wifi',{m:'POST',q:{ssid:$('ssid').value,pass:$('pass').value}});log(r.message)}
 status();poll();recs();setInterval(poll,1500);setInterval(status,5000);
 </script></body></html>
@@ -152,7 +166,8 @@ static void handleStatus() {
     j += "\"carrier\":" + String(IR_CARRIER_HZ) + ",";
     j += "\"rx_idle\":\"" + String(cfg.rxPin == NO_PIN ? "n/a" : (digitalRead(cfg.rxPin) ? "HIGH" : "LOW (no receiver?)")) + "\",";
     j += "\"pins\":{\"led1\":" + pinJson(cfg.ledPin[0]) + ",\"led2\":" + pinJson(cfg.ledPin[1]) +
-         ",\"led3\":" + pinJson(cfg.ledPin[2]) + ",\"rx\":" + pinJson(cfg.rxPin) + "},";
+         ",\"led3\":" + pinJson(cfg.ledPin[2]) + ",\"rx\":" + pinJson(cfg.rxPin) +
+         ",\"status\":" + pinJson(cfg.statusPin) + ",\"status_invert\":" + String(cfg.statusInvert ? "true" : "false") + "},";
     j += "\"candidates\":[";
     for (int i = 0; i < CANDIDATE_COUNT; i++) j += String(CANDIDATE_PINS[i]) + (i + 1 < CANDIDATE_COUNT ? "," : "");
     j += "]}";
@@ -276,6 +291,82 @@ static void handlePlay() {
     if (appPlay(server.arg("name").c_str(), msg)) ok(msg); else fail(400, msg);
 }
 
+// ---- export (chunked, so 32 recordings don't need to fit in one String)
+static void sendTimings(const uint32_t *t, int n) {
+    String chunk = "[";
+    for (int i = 0; i < n; i++) {
+        chunk += String(t[i]); if (i + 1 < n) chunk += ",";
+        if (chunk.length() > 1024) { server.sendContent(chunk); chunk = ""; }
+    }
+    server.sendContent(chunk + "]");
+}
+
+static uint32_t exportBuf[REC_MAX_PULSES];
+
+static void handleExport() {
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.sendHeader("Content-Disposition", "attachment; filename=\"ir_export.json\"");
+    server.send(200, "application/json", "");
+    server.sendContent("{\"device\":\"ir-blaster\",\"carrier_hz\":" + String(IR_CARRIER_HZ) +
+                       ",\"unit\":\"us\",\"format\":\"mark,space,mark,...\",\"uptime_s\":" + String(millis() / 1000) +
+                       ",\"last_capture\":{\"pulses\":" + String(appLastPulses()) + ",\"timings\":");
+    sendTimings(appLastCapture(), appLastPulses());
+    server.sendContent("},\"recordings\":[");
+    RecInfo info[REC_SLOTS];
+    int n = recList(info, REC_SLOTS);
+    for (int i = 0; i < n; i++) {
+        int k = recLoad(info[i].slot, exportBuf, REC_MAX_PULSES);
+        server.sendContent("{\"name\":" + jsonStr(info[i].name) + ",\"pulses\":" + String(k) + ",\"timings\":");
+        sendTimings(exportBuf, k);
+        server.sendContent(i + 1 < n ? "}," : "}");
+    }
+    server.sendContent("]}");
+    server.sendContent("");    // end of chunked body
+}
+
+static void handleLast() {
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "");
+    server.sendContent("{\"pulses\":" + String(appLastPulses()) + ",\"carrier_hz\":" + String(IR_CARRIER_HZ) + ",\"timings\":");
+    sendTimings(appLastCapture(), appLastPulses());
+    server.sendContent("}");
+    server.sendContent("");
+}
+
+// ---- OTA: POST a .uf2 as multipart "file" to /update
+static bool otaOk = false;
+
+static void handleUpdateDone() {
+    if (otaOk && !Update.hasError()) {
+        ok("update written, rebooting");
+        delay(300);
+        lt_reboot();
+    } else {
+        fail(500, String("update failed: ") + Update.errorString());
+    }
+}
+
+static void handleUpdateUpload() {
+    HTTPUpload &up = server.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        Serial.printf("ota: receiving '%s'\n", up.filename.c_str());
+        otaOk = Update.begin(UPDATE_SIZE_UNKNOWN);
+        if (!otaOk) Serial.printf("ota: begin failed: %s\n", Update.errorString());
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        if (otaOk && Update.write(up.buf, up.currentSize) != up.currentSize) {
+            otaOk = false;
+            Serial.printf("ota: write failed: %s\n", Update.errorString());
+        }
+        appStatusBlink(50);
+    } else if (up.status == UPLOAD_FILE_END) {
+        if (otaOk && Update.end(true)) Serial.printf("ota: done, %u bytes\n", (unsigned)up.totalSize);
+        else { otaOk = false; Serial.printf("ota: end failed: %s\n", Update.errorString()); }
+    } else if (up.status == UPLOAD_FILE_ABORTED) {
+        otaOk = false;
+        Serial.println("ota: aborted");
+    }
+}
+
 static void handleReboot() {
     ok("rebooting");
     delay(200);
@@ -297,6 +388,9 @@ void webBegin() {
     server.on("/api/scan", HTTP_POST, handleScan);
     server.on("/api/wifi", HTTP_POST, handleWifi);
     server.on("/api/reboot", HTTP_POST, handleReboot);
+    server.on("/api/export", HTTP_GET, handleExport);
+    server.on("/api/last", HTTP_GET, handleLast);
+    server.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
     server.on("/api/recordings", HTTP_GET, handleRecordings);
     server.on("/api/record", HTTP_POST, handleRecord);
     server.on("/api/record/last", HTTP_POST, handleRecordLast);

@@ -73,10 +73,11 @@ Pins are assigned at runtime from the serial console and stored in flash
 Candidate GPIOs on the CB3S: P6 P7 P8 P9 P14 P20 P21 P22 P23 P24 P26.
 P10/P11 are the serial console and are refused.
 
-Known so far on this board: **P8 drives the blue status LED** (configured as
-`sled pin P8`; the firmware blinks it 3x at boot, 1 Hz while connecting to
-WiFi, steady when connected, and flashes it on IR send/receive). The receiver
-pin is not known yet (`rx=none` by default); find it with `rx scan`.
+Known so far on this board: **P8 drives the blue status LED** (configurable
+with `sled pin P8`; the firmware blinks it 3x at boot, 1 Hz while connecting
+to WiFi, steady when connected, and flashes it on IR send/receive). The **IR
+receiver is on P7** (found with `rx scan`). LED 1 on P26 replays
+successfully.
 
 ### Finding the pins (test mode)
 
@@ -151,6 +152,42 @@ RX NEC addr=0x04 cmd=0x08 raw=0xF708FB04
 RX raw 36 pulses (not NEC)         <- another protocol; still proves the pin
 ```
 
+## OTA updates
+
+Once the device is on WiFi you never need the serial adapter again:
+
+```sh
+pio run -e cb3s_ota -t upload --upload-port ir-blaster.local   # or the IP
+```
+
+That builds and POSTs `firmware.uf2` to `/update`; the device verifies it,
+reboots and keeps its config and recordings (they live in `userdata`, outside
+the app partitions). The web page has the same under **Firmware update**, and
+plain curl works too:
+
+```sh
+curl -F "file=@.pio/build/cb3s/firmware.uf2" http://ir-blaster.local/update
+```
+
+If an OTA ever bricks the app, the serial method in **Flash** still works.
+
+## Exporting captures for analysis
+
+```sh
+curl -o ir_export.json http://ir-blaster.local/api/export   # or the Download button on the web page
+python3 tools/ir_analyze.py ir_export.json                   # all recordings
+python3 tools/ir_analyze.py ir_export.json ac_on             # one of them
+```
+
+The export holds the last capture and every recording as raw microsecond
+timings (`mark,space,mark,...`). `tools/ir_analyze.py` splits multi-part
+frames, detects the header, works out whether bits are mark-length or
+space-length encoded, prints the bytes LSB- and MSB-first, and guesses the
+protocol family from a table. Record a few states (`ac_cool_22`,
+`ac_cool_23`, `ac_off`) and diff the byte rows to find temperature, mode and
+checksum fields. `GET /api/last` returns just the most recent capture; the
+serial `export` command prints the same JSON.
+
 ## Web page
 
 Once on WiFi: `http://ir-blaster.local/` (or the IP printed on the console).
@@ -161,6 +198,7 @@ JSON API behind it (all `POST` take query-string arguments):
 
 ```
 GET  /api/status            GET  /api/received          GET  /api/recordings
+GET  /api/export            GET  /api/last              POST /update  (multipart "file" = .uf2)
 POST /api/send?addr=&cmd=   POST /api/send?raw=0x…      POST /api/play?name=
 POST /api/record?name=&sec= POST /api/record/last?name= POST /api/recordings/delete?name=
 POST /api/pins?led1=&led2=&led3=&rx=&status=&status_invert=

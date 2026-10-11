@@ -41,6 +41,7 @@ int    appRecord(const char *name, uint32_t waitSec, String &msg);   // waits fo
 bool   appSaveLast(const char *name, String &msg);                    // saves the last capture
 bool   appPlay(const char *name, String &msg);
 int    appLastPulses();
+const uint32_t *appLastCapture();
 
 // Status LED
 void appStatusBlink(uint32_t ms);
