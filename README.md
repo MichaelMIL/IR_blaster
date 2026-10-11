@@ -115,6 +115,17 @@ del ac_cool_24
 The web page has the same under **Recordings**, and `POST /api/play?name=…`
 is what a Home Assistant REST command would call.
 
+Several keys in a row: `rec ac_off ac_cool_22 ac_cool_23` waits for one key
+press per name (serial), or use **Record a sequence** on the web page.
+
+Live stream: **Live capture → Start stream** on the web page lists every frame
+the receiver sees, with its raw timings, a copy button and a "save…" button
+per entry, so you can press keys freely and name the good captures afterwards.
+On serial, `stream on` prints one line per frame with the timings as JSON.
+API: `GET /api/stream?after=<id>` (last 8 captures), `POST /api/stream/save?id=&name=`.
+`POST /api/send?addr=&cmd=&loopback=1` sends with the receiver kept on, which
+shows up in the stream and makes a quick self-test.
+
 Tip: AC remotes transmit their *entire state* (mode, temperature, fan, swing)
 on every key press, so record one entry per state you want, e.g.
 `ac_off`, `ac_cool_24`, `ac_cool_22`, `ac_heat_26`.

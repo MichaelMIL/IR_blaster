@@ -55,6 +55,45 @@ static RxRecord rxHist[RX_HISTORY];
 static int      rxHead = 0, rxLen = 0;
 static uint32_t rxSeq = 0;
 
+// Live stream ring (full timings of the last STREAM_CAPS captures)
+static StreamCap streamRing[STREAM_CAPS];
+static int       streamHead = 0;     // next slot to write
+static uint32_t  streamSeq = 0;
+static bool      streamSerial = false;
+
+static void streamPush(const IrFrame &f, const uint32_t *t, int n) {
+    StreamCap &c = streamRing[streamHead];
+    streamHead = (streamHead + 1) % STREAM_CAPS;
+    c.id = ++streamSeq; c.t = millis();
+    c.type = f.decoded ? (f.repeat ? 2 : 1) : 0;
+    c.address = f.address; c.command = f.command; c.raw = f.raw;
+    c.n = n < IrReceiver::MAX_EDGES ? n : IrReceiver::MAX_EDGES;
+    for (int i = 0; i < c.n; i++) c.v[i] = t[i] > 65535 ? 65535 : t[i];
+    if (streamSerial) {
+        Serial.printf("STREAM id=%lu pulses=%u type=%s", (unsigned long)c.id, c.n, c.type == 1 ? "nec" : c.type == 2 ? "repeat" : "raw");
+        if (c.type == 1) Serial.printf(" addr=0x%02X cmd=0x%02X", c.address, c.command);
+        Serial.print(" timings=[");
+        for (int i = 0; i < c.n; i++) { Serial.print(c.v[i]); if (i + 1 < c.n) Serial.print(","); }
+        Serial.println("]");
+    }
+}
+uint32_t appStreamLastId() { return streamSeq; }
+const StreamCap *appStreamGet(int i) {
+    const StreamCap &c = streamRing[(streamHead + i) % STREAM_CAPS];
+    return c.id ? &c : nullptr;
+}
+bool appStreamSave(uint32_t id, const char *name, String &msg) {
+    for (int i = 0; i < STREAM_CAPS; i++) {
+        const StreamCap *c = appStreamGet(i);
+        if (!c || c->id != id) continue;
+        for (int k = 0; k < c->n; k++) lastCapture[k] = c->v[k];
+        lastN = c->n;
+        return appSaveLast(name, msg);
+    }
+    msg = "capture no longer available";
+    return false;
+}
+
 static void recordFrame(const IrFrame &f) {
     RxRecord &r = rxHist[(rxHead + rxLen) % RX_HISTORY];
     if (rxLen < RX_HISTORY) rxLen++; else rxHead = (rxHead + 1) % RX_HISTORY;
@@ -103,7 +142,14 @@ static void applyRxPin();
 void appApplyPins() { applyTxPins(); applyRxPin(); }
 int  appTxPinCount() { return tx.pinCount(); }
 static void applyRxPin();
-bool appSendNec(uint8_t a, uint8_t c) { if (!tx.pinCount()) return false; rx.end(); tx.sendNec(a, c); applyRxPin(); appStatusBlink(120); return true; }
+bool appSendNec(uint8_t a, uint8_t c, bool keepRx) {
+    if (!tx.pinCount()) return false;
+    if (!keepRx) rx.end();
+    tx.sendNec(a, c);
+    if (!keepRx) applyRxPin();
+    appStatusBlink(120);
+    return true;
+}
 bool appSendRaw(uint32_t w) { if (!tx.pinCount()) return false; rx.end(); tx.sendNecRaw(w); applyRxPin(); appStatusBlink(120); return true; }
 bool appWifiConnected() { return WiFi.status() == WL_CONNECTED; }
 
@@ -185,7 +231,8 @@ static void printHelp() {
         "  send <addr> <cmd>            send NEC via all configured LEDs\n"
         "  raw <hex32>                  send raw 32-bit NEC word\n"
         "recordings (any remote, e.g. AC):\n"
-        "  rec <name> [sec]             wait for the next key press and store it\n"
+        "  rec <name> [name2 ...] [sec] wait for one key press per name and store each\n"
+        "  stream on|off                print every received frame with raw timings (live)\n"
         "  save <name>                  store the last received frame\n"
         "  play <name>                  retransmit a recording\n"
         "  list | del <name> | dump <name>\n"
@@ -272,7 +319,7 @@ static void rxTest(uint32_t seconds) {
     uint32_t pulses[IrReceiver::MAX_EDGES];
     while ((int32_t)(millis() - end) < 0) {
         IrFrame f;
-        if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) { lastN = f.pulses; printFrame(f); recordFrame(f); }
+        if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) { lastN = f.pulses; printFrame(f); recordFrame(f); streamPush(f, lastCapture, lastN); }
         // Peek raw timings while a frame is still buffered: copy on next poll instead
         if ((int32_t)(millis() - nextTick) >= 0) {
             nextTick += 1000;
@@ -363,7 +410,7 @@ int appRecord(const char *name, uint32_t waitSec, String &msg) {
         if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) {
             lastN = f.pulses < IrReceiver::MAX_EDGES ? f.pulses : IrReceiver::MAX_EDGES;
             if (lastN < 3) continue;                       // noise
-            printFrame(f); recordFrame(f);
+            printFrame(f); recordFrame(f); streamPush(f, lastCapture, lastN);
             // Some remotes send the message 2-3 times with 100-300 ms of silence
             // in between. Keep collecting for a while and store the gaps as spaces
             // so the replay reproduces the whole key press.
@@ -436,7 +483,7 @@ static void txTest(const char *name, int necAddr = -1, int necCmd = -1) {
     uint32_t end = millis() + 300; bool got = false;
     while ((int32_t)(millis() - end) < 0) {
         if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) {
-            lastN = f.pulses; got = true;
+            lastN = f.pulses; got = true; streamPush(f, lastCapture, lastN);
             Serial.printf("  received back: %d pulses (sent %d)%s\n", lastN, n,
                           f.decoded ? "" : "  [not decodable as NEC]");
             if (f.decoded) Serial.printf("  decoded as NEC addr=0x%02X cmd=0x%02X raw=0x%08lX\n", f.address, f.command, (unsigned long)f.raw);
@@ -565,9 +612,21 @@ static void handleCommand(const String &cmd) {
     }
 
     if (c == "rec" || c == "record") {
-        if (n < 2) { Serial.println("usage: rec <name> [sec]   - waits for the next remote key press and stores it"); return; }
-        Serial.printf("recording '%s': press the key on the remote now (%lus)...\n", t[1].c_str(), (unsigned long)argSeconds(t, n, 2, 15));
-        String msg; appRecord(t[1].c_str(), argSeconds(t, n, 2, 15), msg); Serial.println(msg); return;
+        if (n < 2) { Serial.println("usage: rec <name> [name2 name3 ...] [sec]   - waits for one key press per name"); return; }
+        int last = n - 1; uint32_t sec = 15;
+        if (last >= 2 && t[last].toInt() > 0) { sec = t[last].toInt(); last--; }
+        for (int i = 1; i <= last; i++) {
+            Serial.printf("recording '%s' (%d/%d): press the key on the remote now (%lus)...\n", t[i].c_str(), i, last, (unsigned long)sec);
+            String msg; int r = appRecord(t[i].c_str(), sec, msg); Serial.println(msg);
+            if (r <= 0) { Serial.println("sequence stopped"); break; }
+            delay(300);
+        }
+        return;
+    }
+    if (c == "stream") {
+        streamSerial = (n >= 2) ? (t[1] == "on" || t[1] == "1") : !streamSerial;
+        Serial.printf("stream %s: every received frame is printed as one line with its raw timings\n", streamSerial ? "ON" : "OFF");
+        return;
     }
     if (c == "save") {
         if (n < 2) { Serial.println("usage: save <name>   - stores the last received frame"); return; }
@@ -723,7 +782,7 @@ void loop() {
     IrFrame f;
     if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) {
         lastN = f.pulses < IrReceiver::MAX_EDGES ? f.pulses : IrReceiver::MAX_EDGES;
-        printFrame(f); recordFrame(f); appStatusBlink(80);
+        printFrame(f); recordFrame(f); streamPush(f, lastCapture, lastN); appStatusBlink(80);
     }
     statusLedTick();
     webLoop();

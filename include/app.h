@@ -2,6 +2,7 @@
 #pragma once
 #include <Arduino.h>
 #include "config.h"
+#include "ir_nec.h"
 
 struct RxRecord {
     uint32_t t;         // millis() when received
@@ -23,7 +24,7 @@ int      appGetReceived(RxRecord *out, int max);   // oldest first
 uint32_t appReceivedSeq();                         // increments per frame
 void     appClearReceived();
 
-bool appSendNec(uint8_t addr, uint8_t cmd);
+bool appSendNec(uint8_t addr, uint8_t cmd, bool keepRx = false);   // keepRx: receiver stays on (self-test)
 bool appSendRaw(uint32_t word);
 int  appTxPinCount();
 
@@ -44,6 +45,21 @@ int    appLastPulses();
 const uint32_t *appLastCapture();
 
 bool appPressButton(int i, String &msg);
+
+// Live capture stream: the last few raw captures with full timings
+static constexpr int STREAM_CAPS = 8;
+struct StreamCap {
+    uint32_t id;            // 0 = empty; increments per capture
+    uint32_t t;             // millis()
+    uint8_t  type;          // 0 raw, 1 nec, 2 repeat
+    uint8_t  address, command;
+    uint32_t raw;
+    uint16_t n;
+    uint16_t v[IrReceiver::MAX_EDGES];
+};
+uint32_t appStreamLastId();
+const StreamCap *appStreamGet(int i);              // i = 0..STREAM_CAPS-1, oldest first; nullptr if empty
+bool appStreamSave(uint32_t id, const char *name, String &msg);
 
 // Status LED
 void appStatusBlink(uint32_t ms);

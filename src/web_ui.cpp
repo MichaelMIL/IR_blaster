@@ -71,6 +71,12 @@ code{font-family:ui-monospace,Menlo,monospace;background:#0c0e12;padding:1px 5px
  <table style="margin-top:12px"><thead><tr><th>#</th><th>label</th><th>action</th><th></th></tr></thead><tbody id="btns"><tr><td colspan="4" style="color:var(--mute)">no buttons yet</td></tr></tbody></table>
  <div id="btnmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
 </section>
+<section class="wide"><h2>Live capture <span style="text-transform:none;letter-spacing:0;color:var(--mute)">(stream of everything the receiver sees)</span></h2>
+ <div class="row"><button id="strbtn" onclick="streamToggle()">Start stream</button><button class="sec" onclick="$('str').innerHTML=''">Clear</button>
+  <div><label>Record a sequence: names separated by commas, one key press each</label><div class="row"><input id="seqnames" placeholder="ac_off, ac_cool_22, ac_cool_23"><button class="sec" id="seqbtn" onclick="recSeq()">Record sequence</button></div></div></div>
+ <div id="seqmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
+ <table style="margin-top:12px"><thead><tr><th>id</th><th>age</th><th>decode</th><th>pulses</th><th>timings (µs)</th><th></th></tr></thead><tbody id="str"></tbody></table>
+</section>
 <section class="wide"><h2>Recordings <span style="text-transform:none;letter-spacing:0;color:var(--mute)">(any remote, e.g. air conditioner)</span></h2>
  <div class="row"><div><label>Name</label><input id="recname" placeholder="ac_cool_24"></div><button onclick="record()" id="recbtn">Record next key press</button><button class="sec" onclick="saveLast()">Save last received</button></div>
  <table style="margin-top:12px"><thead><tr><th>name</th><th>pulses</th><th>length</th><th></th></tr></thead><tbody id="recs"><tr><td colspan="4" style="color:var(--mute)">no recordings yet</td></tr></tbody></table>
@@ -119,6 +125,16 @@ function fromLast(){if(!lastNec)return $('btnmsg').textContent='no NEC frame rec
 async function recs(){try{const r=await api('/api/recordings');$('brecsel').innerHTML=r.map(x=>`<option>${x.name}</option>`).join('');$('recs').innerHTML=r.length?r.map(x=>`<tr><td><code>${x.name}</code></td><td>${x.pulses}</td><td>${x.ms} ms</td><td style="text-align:right"><button onclick="play('${x.name}')">Play</button> <button class="sec" onclick="if(confirm('Delete ${x.name}?'))api('/api/recordings/delete',{m:'POST',q:{name:'${x.name}'}}).then(recs)">Delete</button></td></tr>`).join(''):'<tr><td colspan="4" style="color:var(--mute)">no recordings yet</td></tr>'}catch(e){}}
 async function record(){const n=$('recname').value.trim();if(!n)return $('recmsg').textContent='enter a name first';const b=$('recbtn');b.disabled=true;$('recmsg').textContent=`recording '${n}': press the key on the remote now (15 s)…`;
  try{const r=await api('/api/record',{m:'POST',q:{name:n,sec:15}});$('recmsg').textContent=r.message}catch(e){$('recmsg').textContent='error: '+e.message}b.disabled=false;recs()}
+let streaming=false,streamAfter=0,streamTimer=null;
+async function streamToggle(){streaming=!streaming;$('strbtn').textContent=streaming?'Stop stream':'Start stream';$('strbtn').className=streaming?'sec':'';if(streaming){streamAfter=0;streamTick()}else clearTimeout(streamTimer)}
+async function streamTick(){if(!streaming)return;try{const r=await api('/api/stream',{q:{after:streamAfter}});if(r.captures.length){streamAfter=r.last;const tb=$('str');
+ for(const c of r.captures){const tr=document.createElement('tr');const dec=c.type==='nec'?`NEC ${hex(c.addr,2)} / ${hex(c.cmd,2)}`:c.type;
+  tr.innerHTML=`<td>${c.id}</td><td>${Math.round((r.now-c.t)/1000)}s</td><td>${dec}</td><td>${c.pulses}</td><td style="font-family:ui-monospace,Menlo,monospace;font-size:12px;max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${c.timings.join(',')}">${c.timings.slice(0,14).join(' ')}${c.pulses>14?' …':''}</td><td style="white-space:nowrap"><button class="sec" onclick="navigator.clipboard.writeText('${c.timings.join(',')}')">copy</button> <button class="sec" onclick="streamSave(${c.id})">save…</button></td>`;
+  tb.prepend(tr)}while(tb.children.length>40)tb.lastChild.remove()}}catch(e){}streamTimer=setTimeout(streamTick,700)}
+async function streamSave(id){const n=prompt('Name for this capture (no spaces):');if(!n)return;try{const r=await api('/api/stream/save',{m:'POST',q:{id,name:n.trim()}});$('recmsg').textContent=r.message;recs()}catch(e){alert(e.message)}}
+async function recSeq(){const names=$('seqnames').value.split(',').map(x=>x.trim()).filter(Boolean);if(!names.length)return $('seqmsg').textContent='enter at least one name';const b=$('seqbtn');b.disabled=true;
+ for(let i=0;i<names.length;i++){$('seqmsg').textContent=`(${i+1}/${names.length}) press the key for '${names[i]}' now… (20 s)`;try{const r=await api('/api/record',{m:'POST',q:{name:names[i],sec:20}});$('seqmsg').textContent=`(${i+1}/${names.length}) ${r.message}`;await new Promise(r=>setTimeout(r,600))}catch(e){$('seqmsg').textContent=`stopped at '${names[i]}': ${e.message}`;break}}
+ b.disabled=false;recs()}
 async function saveNewest(){const n=prompt('Name for this recording (no spaces):');if(!n)return;try{const r=await api('/api/record/last',{m:'POST',q:{name:n.trim()}});$('recmsg').textContent=r.message;recs()}catch(e){alert(e.message)}}
 async function saveLast(){const n=$('recname').value.trim();if(!n)return $('recmsg').textContent='enter a name first';try{const r=await api('/api/record/last',{m:'POST',q:{name:n}});$('recmsg').textContent=r.message}catch(e){$('recmsg').textContent='error: '+e.message}recs()}
 async function play(n){try{const r=await api('/api/play',{m:'POST',q:{name:n}});$('recmsg').textContent=r.message}catch(e){$('recmsg').textContent='error: '+e.message}}
@@ -259,8 +275,8 @@ static void handleSend() {
     unsigned a, c;
     if (sscanf(server.arg("addr").c_str(), "%i", &a) != 1 || sscanf(server.arg("cmd").c_str(), "%i", &c) != 1)
         return fail(400, "need addr and cmd (e.g. 0x04 0x08) or raw");
-    appSendNec(a, c);
-    char b[32]; snprintf(b, sizeof(b), "sent NEC addr=0x%02X cmd=0x%02X", a & 0xFF, c & 0xFF);
+    appSendNec(a, c, server.arg("loopback") == "1");
+    char b[48]; snprintf(b, sizeof(b), "sent NEC addr=0x%02X cmd=0x%02X%s", a & 0xFF, c & 0xFF, server.arg("loopback") == "1" ? " (receiver kept on)" : "");
     ok(b);
 }
 
@@ -465,6 +481,37 @@ static void handleButtonPress() {
     if (appPressButton(server.arg("id").toInt(), msg)) ok(msg); else fail(400, msg);
 }
 
+// ---- live stream
+static void handleStream() {
+    uint32_t after = strtoul(server.arg("after").c_str(), nullptr, 10);
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "");
+    server.sendContent("{\"last\":" + String(appStreamLastId()) + ",\"now\":" + String(millis()) + ",\"captures\":[");
+    bool first = true;
+    for (int i = 0; i < STREAM_CAPS; i++) {
+        const StreamCap *c = appStreamGet(i);
+        if (!c || c->id <= after) continue;
+        String j = String(first ? "" : ",") + "{\"id\":" + String(c->id) + ",\"t\":" + String(c->t) +
+                   ",\"type\":\"" + (c->type == 1 ? "nec" : c->type == 2 ? "repeat" : "raw") + "\"";
+        if (c->type == 1) j += ",\"addr\":" + String(c->address) + ",\"cmd\":" + String(c->command) + ",\"raw\":" + String(c->raw);
+        j += ",\"pulses\":" + String(c->n) + ",\"timings\":[";
+        server.sendContent(j); j = "";
+        for (int k = 0; k < c->n; k++) {
+            j += String(c->v[k]); if (k + 1 < c->n) j += ",";
+            if (j.length() > 1024) { server.sendContent(j); j = ""; }
+        }
+        server.sendContent(j + "]}");
+        first = false;
+    }
+    server.sendContent("]}");
+    server.sendContent("");
+}
+
+static void handleStreamSave() {
+    String msg;
+    if (appStreamSave(strtoul(server.arg("id").c_str(), nullptr, 10), server.arg("name").c_str(), msg)) ok(msg); else fail(400, msg);
+}
+
 static void handleReboot() {
     ok("rebooting");
     delay(200);
@@ -495,6 +542,8 @@ void webBegin() {
     server.on("/api/buttons/delete", HTTP_POST, []() { if (btnDelete(server.arg("id").toInt())) ok("deleted"); else fail(404, "no such button"); });
     server.on("/api/buttons/move", HTTP_POST, []() { if (btnMove(server.arg("id").toInt(), server.arg("dir").toInt() < 0 ? -1 : 1)) ok("moved"); else fail(400, "cannot move"); });
     server.on("/api/button", HTTP_POST, handleButtonPress);
+    server.on("/api/stream", HTTP_GET, handleStream);
+    server.on("/api/stream/save", HTTP_POST, handleStreamSave);
     server.on("/api/recordings", HTTP_GET, handleRecordings);
     server.on("/api/record", HTTP_POST, handleRecord);
     server.on("/api/record/last", HTTP_POST, handleRecordLast);
