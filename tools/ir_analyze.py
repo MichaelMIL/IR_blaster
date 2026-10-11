@@ -40,6 +40,23 @@ KNOWN = [  # (name, header mark, header space, bit mark, zero space, one space)
 def near(v, t, pct=30):
     return abs(v - t) <= t * pct / 100
 
+def clean_glitches(t, min_us=250):
+    """Merge receiver dropouts: a mark or space shorter than min_us is joined
+    with its neighbours (mark+glitch space+mark -> one mark, and vice versa).
+    Returns (cleaned, notes)."""
+    t = list(t); notes = []
+    i = 1
+    while i < len(t) - 1:
+        if t[i] < min_us:
+            kind = "space" if i % 2 else "mark"
+            merged = t[i-1] + t[i] + t[i+1]
+            notes.append(f"merged {t[i-1]}+{t[i]}+{t[i+1]} -> {kind == 'space' and 'mark' or 'space'} {merged} us (glitch {kind} {t[i]} us at index {i})")
+            t[i-1:i+2] = [merged]
+            i = max(1, i - 1)
+        else:
+            i += 1
+    return t, notes
+
 def split_sections(t, gap_us=5000, long_mark_us=4000):
     """Split on spaces longer than gap_us, or on marks longer than long_mark_us
     (a long mark starts a new section's header). Returns [(timings, gap_before)]."""
@@ -128,6 +145,9 @@ def analyse(name, t, carrier=None):
     print(f"{name}: {len(t)} pulses, {sum(t)/1000:.1f} ms total" + (f", carrier {carrier} Hz" if carrier else ""))
     if len(t) < 3:
         print("  too short"); return
+    t, notes = clean_glitches(t)
+    for n in notes: print("  glitch: " + n)
+    if notes: print(f"  after cleaning: {len(t)} pulses")
     sections = split_sections(t)
     print(f"  {len(sections)} section(s)" + (" (split on spaces > 5 ms)" if len(sections) > 1 else ""))
     for si, (sec, gap) in enumerate(sections):
