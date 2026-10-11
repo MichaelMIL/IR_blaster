@@ -78,6 +78,7 @@ static void streamPush(const IrFrame &f, const uint32_t *t, int n) {
     }
 }
 uint32_t appStreamLastId() { return streamSeq; }
+void appStreamClear() { for (int i = 0; i < STREAM_CAPS; i++) streamRing[i].id = 0; }
 const StreamCap *appStreamGet(int i) {
     const StreamCap &c = streamRing[(streamHead + i) % STREAM_CAPS];
     return c.id ? &c : nullptr;

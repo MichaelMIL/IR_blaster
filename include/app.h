@@ -60,6 +60,7 @@ struct StreamCap {
 uint32_t appStreamLastId();
 const StreamCap *appStreamGet(int i);              // i = 0..STREAM_CAPS-1, oldest first; nullptr if empty
 bool appStreamSave(uint32_t id, const char *name, String &msg);
+void appStreamClear();
 
 // Status LED
 void appStatusBlink(uint32_t ms);

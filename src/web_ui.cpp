@@ -72,7 +72,7 @@ code{font-family:ui-monospace,Menlo,monospace;background:#0c0e12;padding:1px 5px
  <div id="btnmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
 </section>
 <section class="wide"><h2>Live capture <span style="text-transform:none;letter-spacing:0;color:var(--mute)">(stream of everything the receiver sees)</span></h2>
- <div class="row"><button id="strbtn" onclick="streamToggle()">Start stream</button><button class="sec" onclick="$('str').innerHTML=''">Clear</button>
+ <div class="row"><button id="strbtn" onclick="streamToggle()">Start stream</button><button class="sec" onclick="streamShowRecent()">Show recent</button><button class="sec" onclick="streamClear()">Clear</button>
   <div><label>Record a sequence: names separated by commas, one key press each</label><div class="row"><input id="seqnames" placeholder="ac_off, ac_cool_22, ac_cool_23"><button class="sec" id="seqbtn" onclick="recSeq()">Record sequence</button></div></div></div>
  <div id="seqmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
  <table style="margin-top:12px"><thead><tr><th>id</th><th>age</th><th>decode</th><th>pulses</th><th>timings (µs)</th><th></th></tr></thead><tbody id="str"></tbody></table>
@@ -126,7 +126,10 @@ async function recs(){try{const r=await api('/api/recordings');$('brecsel').inne
 async function record(){const n=$('recname').value.trim();if(!n)return $('recmsg').textContent='enter a name first';const b=$('recbtn');b.disabled=true;$('recmsg').textContent=`recording '${n}': press the key on the remote now (15 s)…`;
  try{const r=await api('/api/record',{m:'POST',q:{name:n,sec:15}});$('recmsg').textContent=r.message}catch(e){$('recmsg').textContent='error: '+e.message}b.disabled=false;recs()}
 let streaming=false,streamAfter=0,streamTimer=null;
-async function streamToggle(){streaming=!streaming;$('strbtn').textContent=streaming?'Stop stream':'Start stream';$('strbtn').className=streaming?'sec':'';if(streaming){streamAfter=0;streamTick()}else clearTimeout(streamTimer)}
+async function streamToggle(){streaming=!streaming;$('strbtn').textContent=streaming?'Stop stream':'Start stream';$('strbtn').className=streaming?'sec':'';
+ if(streaming){try{const r=await api('/api/stream',{q:{after:4294967295}});streamAfter=r.last}catch(e){streamAfter=0}streamTick()}else clearTimeout(streamTimer)}
+async function streamShowRecent(){const was=streaming;streaming=false;clearTimeout(streamTimer);streamAfter=0;streaming=true;await streamTick();streaming=was;if(!was)clearTimeout(streamTimer)}
+async function streamClear(){$('str').innerHTML='';try{await api('/api/stream/clear',{m:'POST'})}catch(e){}}
 async function streamTick(){if(!streaming)return;try{const r=await api('/api/stream',{q:{after:streamAfter}});if(r.captures.length){streamAfter=r.last;const tb=$('str');
  for(const c of r.captures){const tr=document.createElement('tr');const dec=c.type==='nec'?`NEC ${hex(c.addr,2)} / ${hex(c.cmd,2)}`:c.type;
   tr.innerHTML=`<td>${c.id}</td><td>${Math.round((r.now-c.t)/1000)}s</td><td>${dec}</td><td>${c.pulses}</td><td style="font-family:ui-monospace,Menlo,monospace;font-size:12px;max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${c.timings.join(',')}">${c.timings.slice(0,14).join(' ')}${c.pulses>14?' …':''}</td><td style="white-space:nowrap"><button class="sec" onclick="navigator.clipboard.writeText('${c.timings.join(',')}')">copy</button> <button class="sec" onclick="streamSave(${c.id})">save…</button></td>`;
@@ -544,6 +547,7 @@ void webBegin() {
     server.on("/api/button", HTTP_POST, handleButtonPress);
     server.on("/api/stream", HTTP_GET, handleStream);
     server.on("/api/stream/save", HTTP_POST, handleStreamSave);
+    server.on("/api/stream/clear", HTTP_POST, []() { appStreamClear(); ok("stream history cleared"); });
     server.on("/api/recordings", HTTP_GET, handleRecordings);
     server.on("/api/record", HTTP_POST, handleRecord);
     server.on("/api/record/last", HTTP_POST, handleRecordLast);
