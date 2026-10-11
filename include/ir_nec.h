@@ -51,13 +51,20 @@ private:
     uint32_t _noise = 0;
 };
 
+// Merge receiver dropouts in a captured timing list: any mark or space shorter
+// than minUs is joined with its neighbours. Returns the new length.
+int irCleanGlitches(uint32_t *t, int n, uint32_t minUs = 250);
+
 class IrSender {
 public:
     static constexpr int MAX_PINS = 3;
 
     void setPins(const uint8_t *pins, int count);
     void setCarrier(uint32_t hz);
+    void setPwm(bool usePwm);              // hardware PWM carrier (default) or bit-bang
+    bool pwm() const { return _pwm; }
     int  pinCount() const { return _count; }
+    uint32_t measureBitbangHz();           // actual bit-bang carrier frequency, for diagnostics
 
     void sendTimings(const uint32_t *t, int n);   // raw mark/space list, mark first
     void sendNec(uint8_t address, uint8_t command);
@@ -73,8 +80,13 @@ private:
     void writeAll(int level);
     void calibrate();
 
+    void pinsIdle();
+    void pinsCarrier(bool on);
+
     uint8_t  _pins[MAX_PINS];
+    bool     _pwmOk[MAX_PINS];
     int      _count = 0;
+    bool     _pwm = true;
     uint32_t _carrierHz = 38000;
     uint32_t _halfPeriodUs = 13;
     uint32_t _writeOverheadUs = 0;

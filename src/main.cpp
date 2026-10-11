@@ -189,6 +189,8 @@ static void printHelp() {
         "  play <name>                  retransmit a recording\n"
         "  list | del <name> | dump <name>\n"
         "  export                       JSON of last capture + all recordings (also GET /api/export)\n"
+        "  txtest <name>                play with receiver on, compare what came back (hold a hand in front)\n"
+        "  txcal | txmode pwm|bitbang   carrier diagnostics\n"
         "test mode:\n"
         "  led <1-3> pin <P#|none>      assign GPIO to an IR LED\n"
         "  led <1-3> test [sec]         blink carrier on that LED only (watch via phone camera)\n"
@@ -341,6 +343,9 @@ static bool validName(const char *n) {
 bool appSaveLast(const char *name, String &msg) {
     if (!validName(name)) { msg = "name: 1-23 chars, no spaces"; return false; }
     if (lastN < 3) { msg = "nothing captured yet"; return false; }
+    int before = lastN;
+    lastN = irCleanGlitches(lastCapture, lastN);
+    if (lastN != before) Serial.printf("cleaned %d receiver glitch(es) before saving\n", (before - lastN) / 2);
     if (!recSave(name, lastCapture, lastN)) { msg = "save failed (32 slots full?)"; return false; }
     msg = "saved '" + String(name) + "' (" + String(lastN) + " pulses)";
     return true;
@@ -371,12 +376,47 @@ bool appPlay(const char *name, String &msg) {
     int n = recLoad(slot, playBuf, REC_MAX_PULSES);
     if (n <= 0) { msg = "recording unreadable"; return false; }
     if (tx.pinCount() == 0) { msg = "no LED pins assigned"; return false; }
+    n = irCleanGlitches(playBuf, n);            // older recordings may still contain dropouts
     rx.end();
     tx.sendTimings(playBuf, n);
     applyRxPin();
     appStatusBlink(150);
     msg = "played '" + String(name) + "' (" + String(n) + " pulses)";
     return true;
+}
+
+// Loopback: play a recording while the receiver keeps listening, then compare.
+// Works when some LED light reflects back into the receiver (hold a hand or
+// paper ~10 cm in front of the device).
+static void txTest(const char *name) {
+    int slot = recFind(name);
+    if (slot < 0) { Serial.println("not found"); return; }
+    int n = recLoad(slot, playBuf, REC_MAX_PULSES);
+    n = irCleanGlitches(playBuf, n);
+    if (!rx.active()) { Serial.println("no rx pin"); return; }
+    if (tx.pinCount() == 0) { Serial.println("no LED pins"); return; }
+    Serial.printf("txtest '%s': sending %d pulses (%s carrier), receiver stays on\n", name, n, tx.pwm() ? "PWM" : "bit-bang");
+    IrFrame f; while (rx.poll(f)) {}                     // flush
+    tx.sendTimings(playBuf, n);
+    uint32_t end = millis() + 300; bool got = false;
+    while ((int32_t)(millis() - end) < 0) {
+        if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) {
+            lastN = f.pulses; got = true;
+            Serial.printf("  received back: %d pulses (sent %d)\n", lastN, n);
+            int k = lastN < n ? lastN : n; int bad = 0; long sumErr = 0;
+            for (int i = 0; i < k; i++) {
+                long e = (long)lastCapture[i] - (long)playBuf[i];
+                sumErr += e < 0 ? -e : e;
+                if ((e < 0 ? -e : e) > (long)(playBuf[i] / 4) + 60) bad++;
+            }
+            Serial.printf("  mean |error| %ld us over %d pulses, %d pulse(s) off by >25%%\n", k ? sumErr / k : 0, k, bad);
+            Serial.print("  sent:     "); for (int i = 0; i < 12 && i < n; i++) Serial.printf("%lu ", (unsigned long)playBuf[i]); Serial.println();
+            Serial.print("  received: "); for (int i = 0; i < 12 && i < lastN; i++) Serial.printf("%lu ", (unsigned long)lastCapture[i]); Serial.println();
+            break;
+        }
+        delay(1);
+    }
+    if (!got) Serial.println("  nothing received back: no reflection reaching the receiver, or the LED is not on this pin");
 }
 
 static void listRecordings() {
@@ -481,6 +521,17 @@ static void handleCommand(const String &cmd) {
         String msg; appPlay(t[1].c_str(), msg); Serial.println(msg); return;
     }
     if (c == "list") { listRecordings(); return; }
+    if (c == "txtest") { if (n < 2) Serial.println("usage: txtest <name>"); else txTest(t[1].c_str()); return; }
+    if (c == "txcal") {
+        Serial.printf("tx mode: %s; bit-bang carrier would be %lu Hz (target %d)\n",
+                      tx.pwm() ? "hardware PWM (38.46 kHz)" : "bit-bang", (unsigned long)tx.measureBitbangHz(), IR_CARRIER_HZ);
+        return;
+    }
+    if (c == "txmode") {
+        if (n >= 2 && (t[1] == "pwm" || t[1] == "bitbang")) { tx.setPwm(t[1] == "pwm"); Serial.printf("tx mode: %s\n", t[1].c_str()); }
+        else Serial.println("usage: txmode pwm|bitbang   (not saved; default pwm)");
+        return;
+    }
     if (c == "export") { exportJson(); return; }
     if (c == "fake") {                       // synthetic NEC 0x04/0x08 capture, for testing the storage path
         uint32_t w = 0x04 | (0xFB << 8) | (0x08 << 16) | (0xF7 << 24);

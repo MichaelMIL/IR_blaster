@@ -111,20 +111,50 @@ bool IrReceiver::decodeNec(IrFrame &out) const {
     return true;
 }
 
+int irCleanGlitches(uint32_t *t, int n, uint32_t minUs) {
+    int i = 1;
+    while (i < n - 1) {
+        if (t[i] < minUs) {
+            t[i - 1] = t[i - 1] + t[i] + t[i + 1];
+            for (int k = i; k + 2 < n; k++) t[k] = t[k + 2];
+            n -= 2;
+            if (i > 1) i--;
+        } else {
+            i++;
+        }
+    }
+    return n;
+}
+
 // ------------------------------------------------------------------ sender
 
+// PWM-capable GPIOs on the BK7231N (CB3S): P6 P7 P8 P9 P24 P26
+static bool pinHasPwm(uint8_t p) { return p == 6 || p == 7 || p == 8 || p == 9 || p == 24 || p == 26; }
+
+
 void IrSender::setPins(const uint8_t *pins, int count) {
-    for (int i = 0; i < _count; i++) {           // release old pins
-        digitalWrite(_pins[i], LOW);
-        pinMode(_pins[i], INPUT);
-    }
+    pinsIdle();
+    for (int i = 0; i < _count; i++) pinMode(_pins[i], INPUT);   // release old pins
     _count = count > MAX_PINS ? MAX_PINS : count;
     for (int i = 0; i < _count; i++) {
-        _pins[i] = pins[i];
-        pinMode(_pins[i], OUTPUT);
-        digitalWrite(_pins[i], LOW);
+        _pins[i]  = pins[i];
+        _pwmOk[i] = _pwm && pinHasPwm(pins[i]);
+        if (_pwmOk[i]) {
+            analogWritePeriod(1000000UL / _carrierHz);   // 38 kHz -> 26 us (hardware: 38.46 kHz)
+            analogWrite(_pins[i], 0);                    // claim the pin for PWM, output idle
+        } else {
+            pinMode(_pins[i], OUTPUT);
+            digitalWrite(_pins[i], LOW);
+        }
     }
     calibrate();
+}
+
+void IrSender::setPwm(bool usePwm) {
+    uint8_t pins[MAX_PINS]; int n = _count;
+    for (int i = 0; i < n; i++) pins[i] = _pins[i];
+    _pwm = usePwm;
+    setPins(pins, n);
 }
 
 void IrSender::setCarrier(uint32_t hz) {
@@ -133,29 +163,68 @@ void IrSender::setCarrier(uint32_t hz) {
 }
 
 void IrSender::calibrate() {
-    _halfPeriodUs = 500000UL / _carrierHz;          // 38 kHz -> 13 µs
-    if (_count == 0) { _writeOverheadUs = 0; return; }
-    // Measure how long writeAll() takes so the carrier stays on frequency
-    // regardless of how many LEDs are driven.
+    _halfPeriodUs = 500000UL / _carrierHz;          // 38 kHz -> 13 us
+    _writeOverheadUs = 0;
+    if (_count == 0) return;
+    // Measure how long a GPIO write of all bit-banged pins takes so the
+    // software carrier stays on frequency regardless of LED count.
     uint32_t t0 = micros();
     for (int i = 0; i < 200; i++) writeAll(LOW);
     uint32_t perCall = (micros() - t0) / 200;
     _writeOverheadUs = perCall < _halfPeriodUs - 2 ? perCall : _halfPeriodUs - 2;
 }
 
+uint32_t IrSender::measureBitbangHz() {
+    if (_count == 0) return 0;
+    uint32_t half = _halfPeriodUs - _writeOverheadUs;
+    const int cycles = 2000;
+    uint32_t t0 = micros();
+    for (int i = 0; i < cycles; i++) {
+        writeAll(LOW); delayMicroseconds(half);     // LOW both halves: measures timing only, no IR emitted
+        writeAll(LOW); delayMicroseconds(half);
+    }
+    uint32_t total = micros() - t0;
+    return total ? (uint32_t)((uint64_t)cycles * 1000000ULL / total) : 0;
+}
+
 void IrSender::writeAll(int level) {
-    for (int i = 0; i < _count; i++) digitalWrite(_pins[i], level);
+    for (int i = 0; i < _count; i++)
+        if (!_pwmOk[i]) digitalWrite(_pins[i], level);
+}
+
+void IrSender::pinsIdle() {
+    for (int i = 0; i < _count; i++) {
+        if (_pwmOk[i]) analogWrite(_pins[i], 0);
+        else digitalWrite(_pins[i], LOW);
+    }
+}
+
+void IrSender::pinsCarrier(bool on) {
+    // 50 % duty during a mark, PWM paused (output low) during a space.
+    // (Keeping the PWM running at a tiny duty instead was tried: the BDK
+    // driver then leaves the output high, so the LED stays lit.)
+    for (int i = 0; i < _count; i++)
+        if (_pwmOk[i]) analogWrite(_pins[i], on ? 128 : 0);
 }
 
 void IrSender::mark(uint32_t us) {
-    uint32_t half = _halfPeriodUs - _writeOverheadUs;
-    uint32_t end = micros() + us;
-    while ((int32_t)(micros() - end) < 0) {
-        writeAll(HIGH);
-        delayMicroseconds(half);
-        writeAll(LOW);
-        delayMicroseconds(half);
+    bool anyBitbang = false;
+    for (int i = 0; i < _count; i++) if (!_pwmOk[i]) anyBitbang = true;
+    pinsCarrier(true);
+    if (!anyBitbang) {
+        while (us > 10000) { delayMicroseconds(10000); us -= 10000; }
+        delayMicroseconds(us);
+    } else {
+        uint32_t half = _halfPeriodUs - _writeOverheadUs;
+        uint32_t end = micros() + us;
+        while ((int32_t)(micros() - end) < 0) {
+            writeAll(HIGH);
+            delayMicroseconds(half);
+            writeAll(LOW);
+            delayMicroseconds(half);
+        }
     }
+    pinsCarrier(false);
 }
 
 void IrSender::space(uint32_t us) {
@@ -169,6 +238,7 @@ void IrSender::sendTimings(const uint32_t *t, int n) {
     for (int i = 0; i < n; i++) {
         if (i & 1) space(t[i]); else mark(t[i]);
     }
+    pinsIdle();
     space(TX_GAP);
 }
 
