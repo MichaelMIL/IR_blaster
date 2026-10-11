@@ -45,9 +45,10 @@ int    appLastPulses();
 const uint32_t *appLastCapture();
 
 bool appPressButton(int i, String &msg);
+uint32_t *appScratch();                    // REC_MAX_PULSES-sized shared scratch buffer (single-threaded use)
 
 // Live capture stream: the last few raw captures with full timings
-static constexpr int STREAM_CAPS = 8;
+static constexpr int STREAM_CAPS = 4;      // RAM: ~1.6 KB each
 struct StreamCap {
     uint32_t id;            // 0 = empty; increments per capture
     uint32_t t;             // millis()
@@ -67,4 +68,5 @@ void appStatusBlink(uint32_t ms);
 void appApplyStatusLed();
 
 void webBegin();
+void webOtaWatchdog();
 void webLoop();

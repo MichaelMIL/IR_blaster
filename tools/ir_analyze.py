@@ -193,7 +193,11 @@ def main(argv):
         analyse("timings", t); return
     if not argv:
         print(__doc__); return
-    data = json.load(open(argv[0]))
+    if argv[0].endswith(".jsonl"):                 # output of ir_stream.py
+        lines = [json.loads(l) for l in open(argv[0]) if l.strip()]
+        data = {"recordings": [dict(name=f"#{c['id']} {c.get('ts','')}", timings=c["timings"]) for c in lines]}
+    else:
+        data = json.load(open(argv[0]))
     carrier = data.get("carrier_hz")
     want = argv[1] if len(argv) > 1 else None
     items = []

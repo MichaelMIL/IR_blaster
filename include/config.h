@@ -13,6 +13,10 @@ struct DeviceConfig {
     uint8_t statusPin;           // GPIO of the status LED (blue), NO_PIN to disable
     bool    statusInvert;        // true if the LED is on when the pin is LOW
     uint32_t carrierHz;          // IR carrier (38000 typical; some ACs use 36000/40000)
+    String   mqttHost;           // empty = MQTT disabled
+    uint16_t mqttPort;
+    String   mqttUser;
+    String   mqttPass;
 
     void load();
     void save() const;

@@ -7,6 +7,7 @@
 #include "config.h"
 #include "recordings.h"
 #include "buttons.h"
+#include "mqtt.h"
 
 static WebServer server(80);
 static mDNS      mdns;
@@ -96,6 +97,13 @@ code{font-family:ui-monospace,Menlo,monospace;background:#0c0e12;padding:1px 5px
  <label>Network</label><input id="ssid"><label>Password</label><input id="pass" type="password">
  <div class="row" style="margin-top:10px"><button onclick="saveWifi()">Save &amp; connect</button><button class="sec" onclick="if(confirm('Reboot the device?'))api('/api/reboot',{m:'POST'})">Reboot</button></div>
 </section>
+<section><h2>Home Assistant (MQTT)</h2>
+ <div class="grid"><div><label>Broker host</label><input id="mhost" placeholder="homeassistant.local"></div><div><label>Port</label><input id="mport" placeholder="1883"></div></div>
+ <div class="grid"><div><label>Username</label><input id="muser"></div><div><label>Password</label><input id="mpass" type="password" placeholder="(unchanged)"></div></div>
+ <div class="row" style="margin-top:10px"><button onclick="saveMqtt()">Save &amp; connect</button><button class="sec" onclick="if(confirm('Disable MQTT?')){$('mhost').value='';saveMqtt()}">Disable</button></div>
+ <div id="mqttmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
+ <p style="margin:10px 0 0;color:var(--mute);font-size:12px">With MQTT discovery enabled in Home Assistant, the device and one button entity per remote button appear automatically, plus a "Last IR code" sensor.</p>
+</section>
 <section><h2>Status</h2><table id="st"></table></section>
 </main>
 <script>
@@ -109,7 +117,9 @@ async function status(){const s=await api('/api/status');cands=s.candidates;
  $('net').innerHTML=`<span class="dot ${s.wifi?'on':''}"></span>${s.wifi?s.ssid+' · '+s.ip+' · '+s.rssi+' dBm':'wifi not connected'}`;
  if(document.activeElement.tagName!=='SELECT'){fillSel('led1',s.pins.led1);fillSel('led2',s.pins.led2);fillSel('led3',s.pins.led3);fillSel('rx_pin',s.pins.rx);fillSel('sled',s.pins.status);$('sinv').checked=!!s.pins.status_invert}
  if(!$('ssid').value)$('ssid').value=s.ssid||'';
- $('st').innerHTML=Object.entries({firmware:s.firmware,uptime:s.uptime+' s',ip:s.ip,hostname:s.hostname+'.local',rssi:s.rssi+' dBm',carrier:s.carrier+' Hz',rx_idle:s.rx_idle}).map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join('')}
+ if(!mqttTouched){$('mhost').value=s.mqtt.host||'';$('mport').value=s.mqtt.port||1883;$('muser').value=s.mqtt.user||''}
+ $('mqttmsg').textContent='status: '+s.mqtt.state;
+ $('st').innerHTML=Object.entries({firmware:s.firmware,uptime:s.uptime+' s',ip:s.ip,hostname:s.hostname+'.local',rssi:s.rssi+' dBm',carrier:s.carrier+' Hz',rx_idle:s.rx_idle,mqtt:s.mqtt.state+(s.mqtt.host?' ('+s.mqtt.host+':'+s.mqtt.port+')':''),mqtt_topic:s.mqtt.base}).map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join('')}
 async function poll(){try{const r=await api('/api/received');if(r.seq===lastSeq)return;lastSeq=r.seq;$('rxcount').textContent=r.frames.length?`(${r.frames.length})`:'';
  const necs=r.frames.filter(f=>f.type==='nec');if(necs.length)lastNec=necs[necs.length-1];const now=r.now;$('rx').innerHTML=r.frames.length?r.frames.slice().reverse().map(f=>`<tr><td>${Math.round((now-f.t)/1000)}s</td><td>${f.type}</td><td>${f.type==='nec'?hex(f.addr,2):''}</td><td>${f.type==='nec'?hex(f.cmd,2):''}</td><td>${f.type==='nec'?'<code>'+hex(f.raw,8)+'</code>':f.pulses+' pulses (raw)'}</td><td>${f.type==='nec'?`<button class="sec" onclick="api('/api/send',{m:'POST',q:{raw:'${hex(f.raw,8)}'}})">send</button>`:(f===r.frames[r.frames.length-1]?`<button class="sec" onclick="saveNewest()">save…</button>`:'')}</td></tr>`).join(''):'<tr><td colspan="6" style="color:var(--mute)">nothing received yet</td></tr>'}catch(e){}}
 async function sendNec(){try{const r=await api('/api/send',{m:'POST',q:{addr:$('addr').value,cmd:$('cmd').value}});$('txmsg').textContent=r.message}catch(e){$('txmsg').textContent='error: '+e.message}}
@@ -151,6 +161,8 @@ async function rxScan(){const b=$('rxscan');b.disabled=true;log('Receiver scan: 
 async function copyLast(){try{const r=await api('/api/last');if(!r.pulses)return $('expmsg').textContent='nothing captured yet';await navigator.clipboard.writeText(JSON.stringify(r));$('expmsg').textContent=`copied ${r.pulses} pulses to clipboard`}catch(e){$('expmsg').textContent='error: '+e.message}}
 async function ota(){const f=$('fw').files[0];if(!f)return $('otamsg').textContent='choose a .uf2 file first';const b=$('otabtn');b.disabled=true;$('otamsg').textContent=`uploading ${f.name} (${Math.round(f.size/1024)} KB)…`;
  const fd=new FormData();fd.append('file',f);try{const r=await fetch('/update',{method:'POST',body:fd});const j=await r.json();$('otamsg').textContent=j.message+(j.ok?' — reload this page in ~15 s':'')}catch(e){$('otamsg').textContent='upload ended: '+e.message+' (device may be rebooting)'}b.disabled=false}
+let mqttTouched=false;['mhost','mport','muser','mpass'].forEach(id=>document.addEventListener('DOMContentLoaded',()=>$(id).addEventListener('input',()=>mqttTouched=true)));
+async function saveMqtt(){try{const r=await api('/api/mqtt',{m:'POST',q:{host:$('mhost').value,port:$('mport').value,user:$('muser').value,pass:$('mpass').value}});$('mqttmsg').textContent=r.message;mqttTouched=false;$('mpass').value='';setTimeout(status,3000)}catch(e){$('mqttmsg').textContent='error: '+e.message}}
 async function saveWifi(){const r=await api('/api/wifi',{m:'POST',q:{ssid:$('ssid').value,pass:$('pass').value}});log(r.message)}
 status();poll();recs();btns();setInterval(poll,1500);setInterval(status,5000);
 </script></body></html>
@@ -243,6 +255,10 @@ static void handleStatus() {
     j += "\"ip\":\"" + appIp() + "\",";
     j += "\"rssi\":" + String(appWifiConnected() ? WiFi.RSSI() : 0) + ",";
     j += "\"carrier\":" + String(cfg.carrierHz) + ",";
+    j += "\"heap\":{\"free\":" + String(lt_heap_get_free()) + ",\"min_free\":" + String(lt_heap_get_min_free()) +
+         ",\"max_alloc\":" + String(lt_heap_get_max_alloc()) + ",\"size\":" + String(lt_heap_get_size()) + "},";
+    j += "\"mqtt\":{\"state\":" + jsonStr(mqttState()) + ",\"host\":" + jsonStr(cfg.mqttHost) + ",\"port\":" + String(cfg.mqttPort) +
+         ",\"user\":" + jsonStr(cfg.mqttUser) + ",\"base\":" + jsonStr(mqttBaseTopic()) + "},";
     j += "\"rx_idle\":\"" + String(cfg.rxPin == NO_PIN ? "n/a" : (digitalRead(cfg.rxPin) ? "HIGH" : "LOW (no receiver?)")) + "\",";
     j += "\"pins\":{\"led1\":" + pinJson(cfg.ledPin[0]) + ",\"led2\":" + pinJson(cfg.ledPin[1]) +
          ",\"led3\":" + pinJson(cfg.ledPin[2]) + ",\"rx\":" + pinJson(cfg.rxPin) +
@@ -380,7 +396,6 @@ static void sendTimings(const uint32_t *t, int n) {
     server.sendContent(chunk + "]");
 }
 
-static uint32_t exportBuf[REC_MAX_PULSES];
 
 static void handleExport() {
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -394,9 +409,10 @@ static void handleExport() {
     RecInfo info[REC_SLOTS];
     int n = recList(info, REC_SLOTS);
     for (int i = 0; i < n; i++) {
-        int k = recLoad(info[i].slot, exportBuf, REC_MAX_PULSES);
+        uint32_t *buf = appScratch();
+        int k = recLoad(info[i].slot, buf, REC_MAX_PULSES);
         server.sendContent("{\"name\":" + jsonStr(info[i].name) + ",\"pulses\":" + String(k) + ",\"timings\":");
-        sendTimings(exportBuf, k);
+        sendTimings(buf, k);
         server.sendContent(i + 1 < n ? "}," : "}");
     }
     server.sendContent("]}");
@@ -414,6 +430,12 @@ static void handleLast() {
 
 // ---- OTA: POST a .uf2 as multipart "file" to /update
 static bool otaOk = false;
+static uint32_t otaLastActivity = 0;
+
+// A broken upload may never reach END/ABORTED; let MQTT come back after a while.
+void webOtaWatchdog() {
+    if (otaLastActivity && millis() - otaLastActivity > 30000) { otaLastActivity = 0; if (Update.isRunning()) Update.abort(); mqttResume(); }
+}
 
 static void handleUpdateDone() {
     if (otaOk && !Update.hasError()) {
@@ -422,6 +444,7 @@ static void handleUpdateDone() {
         lt_reboot();
     } else {
         fail(500, String("update failed: ") + Update.errorString());
+        mqttResume();
     }
 }
 
@@ -429,6 +452,8 @@ static void handleUpdateUpload() {
     HTTPUpload &up = server.upload();
     if (up.status == UPLOAD_FILE_START) {
         Serial.printf("ota: receiving '%s'\n", up.filename.c_str());
+        mqttSuspend();                       // frees the MQTT socket + buffer: heap is tight (~16 KB free)
+        if (Update.isRunning()) Update.abort();   // a previous broken upload must not leak its buffers
         otaOk = Update.begin(UPDATE_SIZE_UNKNOWN);
         if (!otaOk) Serial.printf("ota: begin failed: %s\n", Update.errorString());
     } else if (up.status == UPLOAD_FILE_WRITE) {
@@ -443,7 +468,10 @@ static void handleUpdateUpload() {
     } else if (up.status == UPLOAD_FILE_ABORTED) {
         otaOk = false;
         Serial.println("ota: aborted");
+        Update.abort();
+        mqttResume();
     }
+    otaLastActivity = millis();
 }
 
 // ---- remote buttons
@@ -476,6 +504,7 @@ static void handleButtonSet() {
     }
     int id = server.hasArg("id") ? server.arg("id").toInt() : btnCount();
     if (!btnSet(id, b)) return fail(400, "could not save (max 24 buttons)");
+    mqttPublishDiscovery();
     ok("button '" + label + "' saved");
 }
 
@@ -515,6 +544,17 @@ static void handleStreamSave() {
     if (appStreamSave(strtoul(server.arg("id").c_str(), nullptr, 10), server.arg("name").c_str(), msg)) ok(msg); else fail(400, msg);
 }
 
+static void handleMqtt() {
+    cfg.mqttHost = server.arg("host"); cfg.mqttHost.trim();
+    cfg.mqttPort = server.arg("port").toInt(); if (!cfg.mqttPort) cfg.mqttPort = 1883;
+    cfg.mqttUser = server.arg("user"); cfg.mqttUser.trim();
+    if (server.hasArg("pass") && server.arg("pass").length()) cfg.mqttPass = server.arg("pass");
+    if (!cfg.mqttHost.length()) { cfg.mqttUser = ""; cfg.mqttPass = ""; }
+    cfg.save();
+    mqttReconfigure();
+    ok(cfg.mqttHost.length() ? "mqtt settings saved, connecting" : "mqtt disabled");
+}
+
 static void handleReboot() {
     ok("rebooting");
     delay(200);
@@ -535,6 +575,7 @@ void webBegin() {
     server.on("/api/blink", HTTP_POST, handleBlink);
     server.on("/api/scan", HTTP_POST, handleScan);
     server.on("/api/wifi", HTTP_POST, handleWifi);
+    server.on("/api/mqtt", HTTP_POST, handleMqtt);
     server.on("/api/reboot", HTTP_POST, handleReboot);
     server.on("/api/export", HTTP_GET, handleExport);
     server.on("/api/last", HTTP_GET, handleLast);
@@ -542,8 +583,8 @@ void webBegin() {
     server.on("/remote", HTTP_GET, []() { sendPage(REMOTE_HTML); });
     server.on("/api/buttons", HTTP_GET, handleButtons);
     server.on("/api/buttons/set", HTTP_POST, handleButtonSet);
-    server.on("/api/buttons/delete", HTTP_POST, []() { if (btnDelete(server.arg("id").toInt())) ok("deleted"); else fail(404, "no such button"); });
-    server.on("/api/buttons/move", HTTP_POST, []() { if (btnMove(server.arg("id").toInt(), server.arg("dir").toInt() < 0 ? -1 : 1)) ok("moved"); else fail(400, "cannot move"); });
+    server.on("/api/buttons/delete", HTTP_POST, []() { if (btnDelete(server.arg("id").toInt())) { mqttPublishDiscovery(); ok("deleted"); } else fail(404, "no such button"); });
+    server.on("/api/buttons/move", HTTP_POST, []() { if (btnMove(server.arg("id").toInt(), server.arg("dir").toInt() < 0 ? -1 : 1)) { mqttPublishDiscovery(); ok("moved"); } else fail(400, "cannot move"); });
     server.on("/api/button", HTTP_POST, handleButtonPress);
     server.on("/api/stream", HTTP_GET, handleStream);
     server.on("/api/stream/save", HTTP_POST, handleStreamSave);
@@ -563,4 +604,5 @@ void webBegin() {
 
 void webLoop() {
     if (started) server.handleClient();
+    webOtaWatchdog();
 }

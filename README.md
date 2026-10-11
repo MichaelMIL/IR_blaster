@@ -163,6 +163,58 @@ RX NEC addr=0x04 cmd=0x08 raw=0xF708FB04
 RX raw 36 pulses (not NEC)         <- another protocol; still proves the pin
 ```
 
+## Home Assistant (MQTT)
+
+Set the broker on the admin page under **Home Assistant (MQTT)** (host, port,
+optional user/password) or on serial: `mqtt host 192.168.1.10 1883`,
+`mqtt user …`, `mqtt pass …`, `mqtt` for status. With MQTT discovery enabled in
+Home Assistant (the default) the device appears automatically as
+"IR Blaster" with:
+
+- one **button** entity per remote button (same list as `/remote`), kept in
+  sync when buttons are added, renamed, reordered or deleted
+- a **Last IR code** sensor (`NEC BA/1E`, `raw 197 pulses`, …) with the full
+  frame as attributes, updated on every received frame
+- availability from the `status` topic (LWT), so entities grey out when the
+  device is off
+
+Topics (`<base>` = `ir_blaster/<last 3 MAC bytes>`, shown on the Status panel):
+
+```
+<base>/status        online | offline (retained)
+<base>/received      {"code":"NEC BA/1E","type":"nec","addr":186,"cmd":30,"raw":"0xE11E45BA","pulses":67}
+<base>/result        {"ok":true,"message":"…"} after every command
+<base>/cmd/button    payload: button index or label           e.g. "AC on"
+<base>/cmd/send      payload: "0xBA 0x1E" or {"addr":"0xBA","cmd":30}
+<base>/cmd/raw       payload: 32-bit NEC word                  e.g. 0xE11E45BA
+<base>/cmd/play      payload: recording name                   e.g. AC_ON
+```
+
+## Stream recorder (PC side)
+
+`tools/ir_stream.py` follows the live capture stream and writes every frame to
+a file:
+
+```sh
+python3 tools/ir_stream.py --host ir-blaster.local            # -> ir_stream_<date>.jsonl
+python3 tools/ir_stream.py --host 192.168.50.209 --prompt     # ask for a name after each capture and save it on the device
+python3 tools/ir_stream.py --json --out session.json          # one JSON document (same shape as /api/export)
+python3 tools/ir_analyze.py ir_stream_….jsonl                 # the analyzer reads both formats
+```
+
+On macOS use the system `python3` (`/usr/bin/python3`): other Python builds
+(Homebrew, conda, PlatformIO's) are blocked from the local network until you
+allow them under System Settings → Privacy & Security → Local Network, and
+fail with "No route to host".
+
+## RAM budget
+
+The BK7231N leaves this firmware only ~72 KB of heap after the WiFi stack.
+Static buffers (stream ring, capture buffers, flash slots) are sized to keep
+~30 KB free; below ~20 KB, OTA uploads and large HTTP responses fail with
+dropped connections. `GET /api/status` reports `heap.free` / `heap.min_free`;
+MQTT is suspended and its buffer released for the duration of an OTA upload.
+
 ## OTA updates
 
 Once the device is on WiFi you never need the serial adapter again:
@@ -253,7 +305,7 @@ POST /api/wifi?ssid=&pass=  POST /api/reboot
 
 ## Next steps
 
-- MQTT / Home Assistant discovery so recordings show up as buttons
+- Expose recordings as HA buttons directly (today: add them as remote buttons)
 - Add more protocols (Samsung, Sony SIRC, RC5, raw timing capture/replay)
 - OTA updates via `ArduinoOTA` or the LibreTiny OTA helper
 

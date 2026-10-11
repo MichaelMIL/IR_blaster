@@ -10,6 +10,7 @@
 #include "app.h"
 #include "recordings.h"
 #include "buttons.h"
+#include "mqtt.h"
 
 #ifndef IR_CARRIER_HZ
 #define IR_CARRIER_HZ 38000
@@ -24,7 +25,8 @@ static uint32_t   wifiStartedAt = 0;
 // Last raw capture (for `save` / replay of non-NEC remotes such as AC units)
 static uint32_t lastCapture[IrReceiver::MAX_EDGES];
 static int      lastN = 0;
-static uint32_t playBuf[REC_MAX_PULSES];
+static uint32_t playBuf[REC_MAX_PULSES];     // shared scratch: play / dump / txtest / export / multi-frame record
+uint32_t *appScratch() { return playBuf; }
 int appLastPulses() { return lastN; }
 const uint32_t *appLastCapture() { return lastCapture; }
 
@@ -102,6 +104,7 @@ static void recordFrame(const IrFrame &f) {
     r.type = f.decoded ? (f.repeat ? 2 : 1) : 0;
     r.address = f.address; r.command = f.command; r.raw = f.raw; r.pulses = f.pulses;
     rxSeq++;
+    mqttPublishReceived(r);
 }
 
 int appGetReceived(RxRecord *out, int max) {
@@ -213,8 +216,9 @@ static void wifiStatus() {
 }
 
 static void printStatus() {
-    Serial.printf("firmware: ir_blaster on %s, LibreTiny %s, uptime %lus\n",
-                  LT_BOARD_STR, lt_get_version(), (unsigned long)(millis() / 1000));
+    Serial.printf("firmware: ir_blaster on %s, LibreTiny %s, uptime %lus, heap free %lu / min %lu / largest %lu\n",
+                  LT_BOARD_STR, lt_get_version(), (unsigned long)(millis() / 1000),
+                  (unsigned long)lt_heap_get_free(), (unsigned long)lt_heap_get_min_free(), (unsigned long)lt_heap_get_max_alloc());
     wifiStatus();
     Serial.print("pins:");
     for (int i = 0; i < LED_COUNT; i++) Serial.printf(" led%d=%s", i + 1, pinName(cfg.ledPin[i]));
@@ -229,6 +233,7 @@ static void printHelp() {
         "  wifi ssid <name>             set network name (spaces allowed)\n"
         "  wifi pass <password>         set password\n"
         "  wifi connect | status | clear\n"
+        "  mqtt host <host> [port] | mqtt user <u> | mqtt pass <p> | mqtt clear | mqtt   (Home Assistant)\n"
         "  send <addr> <cmd>            send NEC via all configured LEDs\n"
         "  raw <hex32>                  send raw 32-bit NEC word\n"
         "recordings (any remote, e.g. AC):\n"
@@ -406,7 +411,7 @@ int appRecord(const char *name, uint32_t waitSec, String &msg) {
     if (!rx.active()) { msg = "no receiver pin assigned (run rx scan)"; return -1; }
     uint32_t end = millis() + waitSec * 1000;
     IrFrame f;
-    static uint32_t part[IrReceiver::MAX_EDGES];
+    uint32_t *part = playBuf;                                   // scratch, not playing while recording
     while ((int32_t)(millis() - end) < 0) {
         if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) {
             lastN = f.pulses < IrReceiver::MAX_EDGES ? f.pulses : IrReceiver::MAX_EDGES;
@@ -418,8 +423,8 @@ int appRecord(const char *name, uint32_t waitSec, String &msg) {
             int frames = 1;
             uint32_t quiet = millis() + 400;
             while ((int32_t)(millis() - quiet) < 0) {
-                if (rx.poll(f, part, IrReceiver::MAX_EDGES)) {
-                    int pn = f.pulses < IrReceiver::MAX_EDGES ? f.pulses : IrReceiver::MAX_EDGES;
+                if (rx.poll(f, part, REC_MAX_PULSES)) {
+                    int pn = f.pulses < REC_MAX_PULSES ? f.pulses : REC_MAX_PULSES;
                     if (pn < 3) continue;
                     uint32_t gap = rx.lastGapUs();
                     if (lastN + 1 + pn > IrReceiver::MAX_EDGES) break;
@@ -706,6 +711,16 @@ static void handleCommand(const String &cmd) {
         Serial.println("usage: sled pin <P#|none> | sled invert on|off | sled test"); return;
     }
 
+    if (c == "mqtt") {
+        if (n >= 3 && t[1] == "host") { cfg.mqttHost = t[2]; if (n >= 4) cfg.mqttPort = t[3].toInt(); cfg.save(); mqttReconfigure(); Serial.printf("mqtt host=%s port=%u saved\n", cfg.mqttHost.c_str(), cfg.mqttPort); return; }
+        if (n >= 3 && t[1] == "user") { cfg.mqttUser = t[2]; cfg.save(); mqttReconfigure(); Serial.println("mqtt user saved"); return; }
+        if (n >= 3 && t[1] == "pass") { cfg.mqttPass = cmd.substring(cmd.indexOf("pass") + 5); cfg.mqttPass.trim(); cfg.save(); mqttReconfigure(); Serial.println("mqtt password saved"); return; }
+        if (n >= 2 && t[1] == "clear") { cfg.mqttHost = ""; cfg.mqttUser = ""; cfg.mqttPass = ""; cfg.save(); mqttReconfigure(); Serial.println("mqtt disabled"); return; }
+        Serial.printf("mqtt: %s  host=%s port=%u user=%s base=%s\n", mqttState().c_str(), cfg.mqttHost.c_str(), cfg.mqttPort, cfg.mqttUser.c_str(), mqttBaseTopic().c_str());
+        Serial.println("usage: mqtt host <host> [port] | mqtt user <u> | mqtt pass <p> | mqtt clear | mqtt");
+        return;
+    }
+
     if (c == "send") {
         unsigned addr = 0, command = 0;
         if (n >= 3 && sscanf(t[1].c_str(), "%i", &addr) == 1 && sscanf(t[2].c_str(), "%i", &command) == 1) {
@@ -775,6 +790,7 @@ void setup() {
     tx.setCarrier(cfg.carrierHz);
     applyRxPin();
     printStatus();
+    mqttBegin();
     if (cfg.hasWifi()) wifiBegin();
     Serial.println("type 'help' for commands");
 }
@@ -787,6 +803,7 @@ void loop() {
     }
     statusLedTick();
     webLoop();
+    mqttLoop();
 
     if (cfg.hasWifi()) {
         bool connected = WiFi.status() == WL_CONNECTED;

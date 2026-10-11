@@ -34,10 +34,14 @@ struct __attribute__((packed)) StoredConfig {
     uint8_t  statusPin;
     uint8_t  statusInvert;
     uint32_t carrierHz;
+    char     mqttHost[65];
+    uint16_t mqttPort;
+    char     mqttUser[33];
+    char     mqttPass[65];
     uint32_t crc;
 };
 static constexpr uint32_t CFG_MAGIC   = 0x49524231;   // "IRB1"
-static constexpr uint16_t CFG_VERSION = 3;
+static constexpr uint16_t CFG_VERSION = 4;
 static constexpr uint32_t CFG_OFFSET  = FLASH_USERDATA_OFFSET;
 
 static uint32_t crc32(const uint8_t *p, size_t n) {
@@ -58,6 +62,7 @@ void DeviceConfig::reset() {
     statusPin = STATUS_LED_PIN;
     statusInvert = false;
     carrierHz = IR_CARRIER_HZ;
+    mqttHost = ""; mqttPort = 1883; mqttUser = ""; mqttPass = "";
 }
 
 void DeviceConfig::load() {
@@ -79,6 +84,21 @@ void DeviceConfig::load() {
         save();
         return;
     }
+    if (s.version == 3) {
+        struct __attribute__((packed)) V3 { uint32_t magic; uint16_t version, length; char ssid[33]; char pass[65];
+                                            uint8_t ledPin[LED_COUNT]; uint8_t rxPin, statusPin, statusInvert; uint32_t carrierHz; uint32_t crc; } v3;
+        if (s.length != sizeof(v3)) return;
+        lt_flash_read(CFG_OFFSET, (uint8_t *)&v3, sizeof(v3));
+        if (v3.crc != crc32((uint8_t *)&v3, sizeof(v3) - 4)) return;
+        v3.ssid[32] = 0; v3.pass[64] = 0;
+        ssid = v3.ssid; pass = v3.pass;
+        for (int i = 0; i < LED_COUNT; i++) ledPin[i] = v3.ledPin[i];
+        rxPin = v3.rxPin; statusPin = v3.statusPin; statusInvert = v3.statusInvert != 0;
+        carrierHz = (v3.carrierHz >= 30000 && v3.carrierHz <= 60000) ? v3.carrierHz : IR_CARRIER_HZ;
+        Serial.println("config: migrated from v3");
+        save();
+        return;
+    }
     if (s.version != CFG_VERSION || s.length != sizeof(s)) return;
     if (s.crc != crc32((uint8_t *)&s, sizeof(s) - sizeof(s.crc))) {
         Serial.println("config: bad checksum, using defaults");
@@ -93,6 +113,8 @@ void DeviceConfig::load() {
     statusPin = s.statusPin;
     statusInvert = s.statusInvert != 0;
     carrierHz = (s.carrierHz >= 30000 && s.carrierHz <= 60000) ? s.carrierHz : IR_CARRIER_HZ;
+    s.mqttHost[64] = 0; s.mqttUser[32] = 0; s.mqttPass[64] = 0;
+    mqttHost = s.mqttHost; mqttPort = s.mqttPort ? s.mqttPort : 1883; mqttUser = s.mqttUser; mqttPass = s.mqttPass;
 }
 
 void DeviceConfig::save() const {
@@ -107,6 +129,8 @@ void DeviceConfig::save() const {
     s.statusPin = statusPin;
     s.statusInvert = statusInvert ? 1 : 0;
     s.carrierHz = carrierHz;
+    strncpy(s.mqttHost, mqttHost.c_str(), 64); s.mqttPort = mqttPort;
+    strncpy(s.mqttUser, mqttUser.c_str(), 32); strncpy(s.mqttPass, mqttPass.c_str(), 64);
     s.crc = crc32((uint8_t *)&s, sizeof(s) - sizeof(s.crc));
 
     if (!lt_flash_erase_block(CFG_OFFSET)) { Serial.println("config: erase failed"); return; }
