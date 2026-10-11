@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include "config.h"
 #include "ir_nec.h"
+#include "app.h"
 
 #ifndef IR_CARRIER_HZ
 #define IR_CARRIER_HZ 38000
@@ -17,6 +18,28 @@ static IrSender   tx;
 static String     line;
 static bool       wifiWasConnected = false;
 static uint32_t   wifiStartedAt = 0;
+
+// Ring buffer of received frames (shared with the web UI)
+static RxRecord rxHist[RX_HISTORY];
+static int      rxHead = 0, rxLen = 0;
+static uint32_t rxSeq = 0;
+
+static void recordFrame(const IrFrame &f) {
+    RxRecord &r = rxHist[(rxHead + rxLen) % RX_HISTORY];
+    if (rxLen < RX_HISTORY) rxLen++; else rxHead = (rxHead + 1) % RX_HISTORY;
+    r.t = millis();
+    r.type = f.decoded ? (f.repeat ? 2 : 1) : 0;
+    r.address = f.address; r.command = f.command; r.raw = f.raw; r.pulses = f.pulses;
+    rxSeq++;
+}
+
+int appGetReceived(RxRecord *out, int max) {
+    int n = rxLen < max ? rxLen : max;
+    for (int i = 0; i < n; i++) out[i] = rxHist[(rxHead + (rxLen - n) + i) % RX_HISTORY];
+    return n;
+}
+uint32_t appReceivedSeq() { return rxSeq; }
+void appClearReceived() { rxHead = rxLen = 0; rxSeq++; }
 
 // ------------------------------------------------------------------ helpers
 
@@ -43,6 +66,14 @@ static bool parsePin(const String &s, uint8_t &out) {
     out = (uint8_t)v;
     return true;
 }
+
+static void applyTxPins();
+static void applyRxPin();
+void appApplyPins() { applyTxPins(); applyRxPin(); }
+int  appTxPinCount() { return tx.pinCount(); }
+bool appSendNec(uint8_t a, uint8_t c) { if (!tx.pinCount()) return false; tx.sendNec(a, c); return true; }
+bool appSendRaw(uint32_t w) { if (!tx.pinCount()) return false; tx.sendNecRaw(w); return true; }
+bool appWifiConnected() { return WiFi.status() == WL_CONNECTED; }
 
 static void applyTxPins() {
     uint8_t pins[LED_COUNT];
@@ -74,7 +105,11 @@ static void printPulses(const uint32_t *p, int n) {
     Serial.println();
 }
 
-static void wifiBegin() {
+void appWifiBegin();
+static void wifiBegin() { appWifiBegin(); }
+String appIp() { return appWifiConnected() ? ipStr(WiFi.localIP()) : String("-"); }
+
+void appWifiBegin() {
     if (!cfg.hasWifi()) {
         Serial.println("wifi: no credentials set (use: wifi ssid <name> / wifi pass <pw>)");
         return;
@@ -89,8 +124,8 @@ static void wifiBegin() {
 
 static void wifiStatus() {
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("wifi: connected to '%s' ip=%s rssi=%d dBm host=ir-blaster\n",
-                      cfg.ssid.c_str(), ipStr(WiFi.localIP()).c_str(), WiFi.RSSI());
+        Serial.printf("wifi: connected to '%s' ip=%s rssi=%d dBm  web: http://%s/ (http://ir-blaster.local/)\n",
+                      cfg.ssid.c_str(), ipStr(WiFi.localIP()).c_str(), WiFi.RSSI(), ipStr(WiFi.localIP()).c_str());
     } else if (cfg.hasWifi()) {
         Serial.printf("wifi: not connected (status=%d), ssid='%s'\n", (int)WiFi.status(), cfg.ssid.c_str());
     } else {
@@ -130,6 +165,8 @@ static void printHelp() {
 
 // --------------------------------------------------------------- test mode
 
+static void ledTest(int idx, uint32_t seconds);
+void appLedTest(int idx, uint32_t seconds) { ledTest(idx, seconds); }
 static void ledTest(int idx, uint32_t seconds) {   // idx -1 = all
     uint8_t pins[LED_COUNT];
     int n = 0;
@@ -147,6 +184,15 @@ static void ledTest(int idx, uint32_t seconds) {   // idx -1 = all
     tx.burst(200, 200, seconds * 1000);
     applyTxPins();
     Serial.println("done");
+}
+
+void appBlinkPin(uint8_t pin, uint32_t seconds) {
+    bool rxWasHere = (cfg.rxPin == pin);
+    if (rxWasHere) rx.end();
+    tx.setPins(&pin, 1);
+    tx.burst(200, 200, seconds * 1000);
+    applyTxPins();
+    if (rxWasHere) applyRxPin();
 }
 
 static void ledScan(uint32_t secPerPin) {
@@ -180,9 +226,7 @@ static void rxTest(uint32_t seconds) {
     uint32_t pulses[IrReceiver::MAX_EDGES];
     while ((int32_t)(millis() - end) < 0) {
         IrFrame f;
-        if (rx.poll(f)) {
-            printFrame(f);
-        }
+        if (rx.poll(f)) { printFrame(f); recordFrame(f); }
         // Peek raw timings while a frame is still buffered: copy on next poll instead
         if ((int32_t)(millis() - nextTick) >= 0) {
             nextTick += 1000;
@@ -197,16 +241,14 @@ static void rxTest(uint32_t seconds) {
     Serial.println("rx test done");
 }
 
-static void rxScan(uint32_t seconds) {
-    Serial.printf("rx scan: watching %d GPIOs for %lus. Point a remote at the receiver and press buttons.\n",
-                  CANDIDATE_COUNT, (unsigned long)seconds);
+void appRxScan(uint32_t seconds, ScanResult &r) {
     rx.end();
     uint8_t ledPins[LED_COUNT];
     int nLed = cfg.activeLedPins(ledPins);
     tx.setPins(nullptr, 0);                        // release LED pins so they can be sampled too
-    uint32_t transitions[CANDIDATE_COUNT] = {0};
     int last[CANDIDATE_COUNT];
     for (int i = 0; i < CANDIDATE_COUNT; i++) {
+        r.transitions[i] = 0;
         pinMode(CANDIDATE_PINS[i], INPUT_PULLUP);
         last[i] = digitalRead(CANDIDATE_PINS[i]);
     }
@@ -214,23 +256,32 @@ static void rxScan(uint32_t seconds) {
     while ((int32_t)(millis() - end) < 0) {
         for (int i = 0; i < CANDIDATE_COUNT; i++) {
             int v = digitalRead(CANDIDATE_PINS[i]);
-            if (v != last[i]) { transitions[i]++; last[i] = v; }
+            if (v != last[i]) { r.transitions[i]++; last[i] = v; }
         }
     }
-    Serial.println("pin   transitions  idle");
-    int best = -1;
+    r.best = -1;
     for (int i = 0; i < CANDIDATE_COUNT; i++) {
-        Serial.printf("%-5s %-12lu %s\n", pinName(CANDIDATE_PINS[i]),
-                      (unsigned long)transitions[i], last[i] ? "HIGH" : "LOW");
-        if (transitions[i] > 20 && (best < 0 || transitions[i] > transitions[best])) best = i;
+        r.idle[i] = last[i];
+        if (r.transitions[i] > 20 && (r.best < 0 || r.transitions[i] > r.transitions[r.best])) r.best = i;
     }
-    if (best >= 0)
-        Serial.printf("=> likely receiver pin: %s   (set with: rx pin %s)\n",
-                      pinName(CANDIDATE_PINS[best]), pinName(CANDIDATE_PINS[best]));
-    else
-        Serial.println("=> no IR activity seen on any pin");
     tx.setPins(ledPins, nLed);
     applyRxPin();
+}
+
+static void rxScan(uint32_t seconds) {
+    Serial.printf("rx scan: watching %d GPIOs for %lus. Point a remote at the receiver and press buttons.\n",
+                  CANDIDATE_COUNT, (unsigned long)seconds);
+    ScanResult r;
+    appRxScan(seconds, r);
+    Serial.println("pin   transitions  idle");
+    for (int i = 0; i < CANDIDATE_COUNT; i++)
+        Serial.printf("%-5s %-12lu %s\n", pinName(CANDIDATE_PINS[i]),
+                      (unsigned long)r.transitions[i], r.idle[i] ? "HIGH" : "LOW");
+    if (r.best >= 0)
+        Serial.printf("=> likely receiver pin: %s   (set with: rx pin %s)\n",
+                      pinName(CANDIDATE_PINS[r.best]), pinName(CANDIDATE_PINS[r.best]));
+    else
+        Serial.println("=> no IR activity seen on any pin");
 }
 
 // ---------------------------------------------------------------- commands
@@ -356,12 +407,14 @@ void setup() {
 
 void loop() {
     IrFrame f;
-    if (rx.poll(f)) printFrame(f);
+    if (rx.poll(f)) { printFrame(f); recordFrame(f); }
+    webLoop();
 
     if (cfg.hasWifi()) {
         bool connected = WiFi.status() == WL_CONNECTED;
         if (connected && !wifiWasConnected) {
             Serial.printf("wifi: connected, ip=%s\n", ipStr(WiFi.localIP()).c_str());
+            webBegin();
         } else if (!connected && wifiWasConnected) {
             Serial.println("wifi: connection lost, reconnecting");
             WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
