@@ -36,5 +36,15 @@ void   appWifiBegin();
 bool   appWifiConnected();
 String appIp();
 
+// Recordings
+int    appRecord(const char *name, uint32_t waitSec, String &msg);   // waits for next IR frame
+bool   appSaveLast(const char *name, String &msg);                    // saves the last capture
+bool   appPlay(const char *name, String &msg);
+int    appLastPulses();
+
+// Status LED
+void appStatusBlink(uint32_t ms);
+void appApplyStatusLed();
+
 void webBegin();
 void webLoop();

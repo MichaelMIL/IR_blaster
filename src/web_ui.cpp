@@ -4,6 +4,7 @@
 #include <mDNS.h>
 #include "app.h"
 #include "config.h"
+#include "recordings.h"
 
 static WebServer server(80);
 static mDNS      mdns;
@@ -50,9 +51,15 @@ code{font-family:ui-monospace,Menlo,monospace;background:#0c0e12;padding:1px 5px
   <div><label>LED 2</label><div class="row"><select id="led2"></select><button class="sec" onclick="test(2)">Test</button></div></div>
   <div><label>LED 3</label><div class="row"><select id="led3"></select><button class="sec" onclick="test(3)">Test</button></div></div>
   <div><label>Receiver</label><div class="row"><select id="rx_pin"></select></div></div>
+  <div><label>Status LED (blue)</label><div class="row"><select id="sled"></select><button class="sec" onclick="api('/api/sled/test',{m:'POST'})">Test</button></div><label style="display:flex;gap:6px;align-items:center;margin-top:6px"><input type="checkbox" id="sinv" style="width:auto">on when pin is LOW (inverted)</label></div>
  </div>
  <div class="row" style="margin-top:12px"><button onclick="savePins()">Save pins</button><button class="sec" onclick="test('all')">Test all LEDs</button><button class="sec" id="ledscan" onclick="ledScan()">Find LEDs (blink each GPIO)</button><button class="sec" id="rxscan" onclick="rxScan()">Find receiver (10 s)</button></div>
  <div id="log"></div>
+</section>
+<section class="wide"><h2>Recordings <span style="text-transform:none;letter-spacing:0;color:var(--mute)">(any remote, e.g. air conditioner)</span></h2>
+ <div class="row"><div><label>Name</label><input id="recname" placeholder="ac_cool_24"></div><button onclick="record()" id="recbtn">Record next key press</button><button class="sec" onclick="saveLast()">Save last received</button></div>
+ <table style="margin-top:12px"><thead><tr><th>name</th><th>pulses</th><th>length</th><th></th></tr></thead><tbody id="recs"><tr><td colspan="4" style="color:var(--mute)">no recordings yet</td></tr></tbody></table>
+ <div id="recmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
 </section>
 <section><h2>WiFi</h2>
  <label>Network</label><input id="ssid"><label>Password</label><input id="pass" type="password">
@@ -69,14 +76,19 @@ let cands=[],lastSeq=-1;
 function fillSel(id,val){const s=$(id);s.innerHTML='<option value="none">none</option>'+cands.map(p=>`<option value="${p}">P${p}</option>`).join('');s.value=val==null?'none':val}
 async function status(){const s=await api('/api/status');cands=s.candidates;
  $('net').innerHTML=`<span class="dot ${s.wifi?'on':''}"></span>${s.wifi?s.ssid+' · '+s.ip+' · '+s.rssi+' dBm':'wifi not connected'}`;
- if(document.activeElement.tagName!=='SELECT'){fillSel('led1',s.pins.led1);fillSel('led2',s.pins.led2);fillSel('led3',s.pins.led3);fillSel('rx_pin',s.pins.rx)}
+ if(document.activeElement.tagName!=='SELECT'){fillSel('led1',s.pins.led1);fillSel('led2',s.pins.led2);fillSel('led3',s.pins.led3);fillSel('rx_pin',s.pins.rx);fillSel('sled',s.pins.status);$('sinv').checked=!!s.pins.status_invert}
  if(!$('ssid').value)$('ssid').value=s.ssid||'';
  $('st').innerHTML=Object.entries({firmware:s.firmware,uptime:s.uptime+' s',ip:s.ip,hostname:s.hostname+'.local',rssi:s.rssi+' dBm',carrier:s.carrier+' Hz',rx_idle:s.rx_idle}).map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join('')}
 async function poll(){try{const r=await api('/api/received');if(r.seq===lastSeq)return;lastSeq=r.seq;$('rxcount').textContent=r.frames.length?`(${r.frames.length})`:'';
- const now=r.now;$('rx').innerHTML=r.frames.length?r.frames.slice().reverse().map(f=>`<tr><td>${Math.round((now-f.t)/1000)}s</td><td>${f.type}</td><td>${f.type==='nec'?hex(f.addr,2):''}</td><td>${f.type==='nec'?hex(f.cmd,2):''}</td><td>${f.type==='nec'?'<code>'+hex(f.raw,8)+'</code>':f.pulses+' pulses'}</td><td>${f.type==='nec'?`<button class="sec" onclick="api('/api/send',{m:'POST',q:{raw:'${hex(f.raw,8)}'}})">send</button>`:''}</td></tr>`).join(''):'<tr><td colspan="6" style="color:var(--mute)">nothing received yet</td></tr>'}catch(e){}}
+ const now=r.now;$('rx').innerHTML=r.frames.length?r.frames.slice().reverse().map(f=>`<tr><td>${Math.round((now-f.t)/1000)}s</td><td>${f.type}</td><td>${f.type==='nec'?hex(f.addr,2):''}</td><td>${f.type==='nec'?hex(f.cmd,2):''}</td><td>${f.type==='nec'?'<code>'+hex(f.raw,8)+'</code>':f.pulses+' pulses (raw)'}</td><td>${f.type==='nec'?`<button class="sec" onclick="api('/api/send',{m:'POST',q:{raw:'${hex(f.raw,8)}'}})">send</button>`:''}</td></tr>`).join(''):'<tr><td colspan="6" style="color:var(--mute)">nothing received yet</td></tr>'}catch(e){}}
 async function sendNec(){try{const r=await api('/api/send',{m:'POST',q:{addr:$('addr').value,cmd:$('cmd').value}});$('txmsg').textContent=r.message}catch(e){$('txmsg').textContent='error: '+e.message}}
 async function sendRaw(){try{const r=await api('/api/send',{m:'POST',q:{raw:$('raw').value}});$('txmsg').textContent=r.message}catch(e){$('txmsg').textContent='error: '+e.message}}
-async function savePins(){const r=await api('/api/pins',{m:'POST',q:{led1:$('led1').value,led2:$('led2').value,led3:$('led3').value,rx:$('rx_pin').value}});log(r.message);status()}
+async function savePins(){const r=await api('/api/pins',{m:'POST',q:{led1:$('led1').value,led2:$('led2').value,led3:$('led3').value,rx:$('rx_pin').value,status:$('sled').value,status_invert:$('sinv').checked?1:0}});log(r.message);status()}
+async function recs(){try{const r=await api('/api/recordings');$('recs').innerHTML=r.length?r.map(x=>`<tr><td><code>${x.name}</code></td><td>${x.pulses}</td><td>${x.ms} ms</td><td style="text-align:right"><button onclick="play('${x.name}')">Play</button> <button class="sec" onclick="if(confirm('Delete ${x.name}?'))api('/api/recordings/delete',{m:'POST',q:{name:'${x.name}'}}).then(recs)">Delete</button></td></tr>`).join(''):'<tr><td colspan="4" style="color:var(--mute)">no recordings yet</td></tr>'}catch(e){}}
+async function record(){const n=$('recname').value.trim();if(!n)return $('recmsg').textContent='enter a name first';const b=$('recbtn');b.disabled=true;$('recmsg').textContent=`recording '${n}': press the key on the remote now (15 s)…`;
+ try{const r=await api('/api/record',{m:'POST',q:{name:n,sec:15}});$('recmsg').textContent=r.message}catch(e){$('recmsg').textContent='error: '+e.message}b.disabled=false;recs()}
+async function saveLast(){const n=$('recname').value.trim();if(!n)return $('recmsg').textContent='enter a name first';try{const r=await api('/api/record/last',{m:'POST',q:{name:n}});$('recmsg').textContent=r.message}catch(e){$('recmsg').textContent='error: '+e.message}recs()}
+async function play(n){try{const r=await api('/api/play',{m:'POST',q:{name:n}});$('recmsg').textContent=r.message}catch(e){$('recmsg').textContent='error: '+e.message}}
 async function test(n){log(`testing LED ${n} for 3 s…`);const r=await api('/api/test',{m:'POST',q:{led:n,sec:3}});log(r.message)}
 async function ledScan(){const b=$('ledscan');b.disabled=true;log('LED scan: watch the LEDs through a phone camera. Each GPIO blinks for 2 s.');
  for(const p of cands){log(`  blinking P${p} …`);try{await api('/api/blink',{m:'POST',q:{pin:p,sec:2}})}catch(e){log('  error '+e.message)}}
@@ -85,7 +97,7 @@ async function rxScan(){const b=$('rxscan');b.disabled=true;log('Receiver scan: 
  try{const r=await api('/api/scan',{m:'POST',q:{sec:10}});r.pins.filter(p=>p.transitions>0).forEach(p=>log(`  P${p.pin}: ${p.transitions} transitions, idle ${p.idle?'HIGH':'LOW'}`));
  if(r.best!=null){log(`=> receiver is most likely P${r.best}`);$('rx_pin').value=r.best}else log('=> no IR activity seen on any GPIO')}catch(e){log('error '+e.message)}b.disabled=false}
 async function saveWifi(){const r=await api('/api/wifi',{m:'POST',q:{ssid:$('ssid').value,pass:$('pass').value}});log(r.message)}
-status();poll();setInterval(poll,1500);setInterval(status,5000);
+status();poll();recs();setInterval(poll,1500);setInterval(status,5000);
 </script></body></html>
 )HTML";
 
@@ -183,10 +195,16 @@ static void handlePins() {
     for (int i = 0; i < LED_COUNT; i++)
         if (!parsePinArg(server.arg(names[i]), led[i])) return fail(400, String("bad pin for ") + names[i]);
     if (!parsePinArg(server.arg("rx"), rxp)) return fail(400, "bad pin for rx");
+    uint8_t sp = cfg.statusPin;
+    if (server.hasArg("status") && !parsePinArg(server.arg("status"), sp)) return fail(400, "bad pin for status");
     for (int i = 0; i < LED_COUNT; i++) cfg.ledPin[i] = led[i];
     cfg.rxPin = rxp;
+    if (cfg.statusPin != NO_PIN && cfg.statusPin != sp) pinMode(cfg.statusPin, INPUT);
+    cfg.statusPin = sp;
+    if (server.hasArg("status_invert")) cfg.statusInvert = server.arg("status_invert") == "1";
     cfg.save();
     appApplyPins();
+    appApplyStatusLed();
     ok("pins saved");
 }
 
@@ -231,6 +249,33 @@ static void handleWifi() {
     appWifiBegin();
 }
 
+static void handleRecordings() {
+    RecInfo info[REC_SLOTS];
+    int n = recList(info, REC_SLOTS);
+    String j = "[";
+    for (int i = 0; i < n; i++)
+        j += "{\"slot\":" + String(info[i].slot) + ",\"name\":" + jsonStr(info[i].name) +
+             ",\"pulses\":" + String(info[i].pulses) + ",\"ms\":" + String(info[i].durationMs) + "}" + (i + 1 < n ? "," : "");
+    server.send(200, "application/json", j + "]");
+}
+
+static void handleRecord() {
+    uint32_t sec = server.arg("sec").toInt(); if (sec == 0 || sec > 60) sec = 15;
+    String msg;
+    int n = appRecord(server.arg("name").c_str(), sec, msg);
+    if (n > 0) ok(msg); else fail(n == 0 ? 408 : 400, msg);
+}
+
+static void handleRecordLast() {
+    String msg;
+    if (appSaveLast(server.arg("name").c_str(), msg)) ok(msg); else fail(400, msg);
+}
+
+static void handlePlay() {
+    String msg;
+    if (appPlay(server.arg("name").c_str(), msg)) ok(msg); else fail(400, msg);
+}
+
 static void handleReboot() {
     ok("rebooting");
     delay(200);
@@ -252,6 +297,12 @@ void webBegin() {
     server.on("/api/scan", HTTP_POST, handleScan);
     server.on("/api/wifi", HTTP_POST, handleWifi);
     server.on("/api/reboot", HTTP_POST, handleReboot);
+    server.on("/api/recordings", HTTP_GET, handleRecordings);
+    server.on("/api/record", HTTP_POST, handleRecord);
+    server.on("/api/record/last", HTTP_POST, handleRecordLast);
+    server.on("/api/play", HTTP_POST, handlePlay);
+    server.on("/api/recordings/delete", HTTP_POST, []() { if (recErase(server.arg("name").c_str())) ok("deleted"); else fail(404, "not found"); });
+    server.on("/api/sled/test", HTTP_POST, []() { for (int i = 0; i < 5; i++) { appStatusBlink(0); digitalWrite(cfg.statusPin, cfg.statusInvert ? LOW : HIGH); delay(200); digitalWrite(cfg.statusPin, cfg.statusInvert ? HIGH : LOW); delay(200); } ok("blinked status LED"); });
     server.onNotFound([]() { fail(404, "not found"); });
     server.begin();
     if (mdns.begin("ir-blaster")) mdns.addService((char *)"http", (char *)"tcp", 80);

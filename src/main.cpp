@@ -8,6 +8,7 @@
 #include "config.h"
 #include "ir_nec.h"
 #include "app.h"
+#include "recordings.h"
 
 #ifndef IR_CARRIER_HZ
 #define IR_CARRIER_HZ 38000
@@ -18,6 +19,34 @@ static IrSender   tx;
 static String     line;
 static bool       wifiWasConnected = false;
 static uint32_t   wifiStartedAt = 0;
+
+// Last raw capture (for `save` / replay of non-NEC remotes such as AC units)
+static uint32_t lastCapture[IrReceiver::MAX_EDGES];
+static int      lastN = 0;
+static uint32_t playBuf[REC_MAX_PULSES];
+int appLastPulses() { return lastN; }
+
+// Status LED
+static uint32_t statusFlashUntil = 0;
+static void statusWrite(bool on) {
+    if (cfg.statusPin == NO_PIN) return;
+    digitalWrite(cfg.statusPin, (on != cfg.statusInvert) ? HIGH : LOW);
+}
+void appApplyStatusLed() {
+    if (cfg.statusPin == NO_PIN) return;
+    pinMode(cfg.statusPin, OUTPUT);
+    statusWrite(false);
+}
+void appStatusBlink(uint32_t ms) { statusFlashUntil = millis() + ms; }
+static void statusLedTick() {
+    if (cfg.statusPin == NO_PIN) return;
+    bool base;
+    if (WiFi.status() == WL_CONNECTED) base = true;                 // steady on
+    else if (cfg.hasWifi())            base = (millis() / 500) & 1; // 1 Hz blink while connecting
+    else                               base = false;                // off
+    bool flash = (int32_t)(millis() - statusFlashUntil) < 0;
+    statusWrite(flash ? !base : base);
+}
 
 // Ring buffer of received frames (shared with the web UI)
 static RxRecord rxHist[RX_HISTORY];
@@ -71,8 +100,9 @@ static void applyTxPins();
 static void applyRxPin();
 void appApplyPins() { applyTxPins(); applyRxPin(); }
 int  appTxPinCount() { return tx.pinCount(); }
-bool appSendNec(uint8_t a, uint8_t c) { if (!tx.pinCount()) return false; tx.sendNec(a, c); return true; }
-bool appSendRaw(uint32_t w) { if (!tx.pinCount()) return false; tx.sendNecRaw(w); return true; }
+static void applyRxPin();
+bool appSendNec(uint8_t a, uint8_t c) { if (!tx.pinCount()) return false; rx.end(); tx.sendNec(a, c); applyRxPin(); appStatusBlink(120); return true; }
+bool appSendRaw(uint32_t w) { if (!tx.pinCount()) return false; rx.end(); tx.sendNecRaw(w); applyRxPin(); appStatusBlink(120); return true; }
 bool appWifiConnected() { return WiFi.status() == WL_CONNECTED; }
 
 static void applyTxPins() {
@@ -94,7 +124,7 @@ static void printFrame(const IrFrame &f) {
                       f.address, f.command, (unsigned long)f.raw,
                       f.extended ? " (extended)" : "");
     } else {
-        Serial.printf("RX raw %d pulses (not NEC)\n", f.pulses);
+        Serial.printf("RX raw %d pulses (not NEC) - 'save <name>' keeps it\n", f.pulses);
     }
 }
 
@@ -139,7 +169,8 @@ static void printStatus() {
     wifiStatus();
     Serial.print("pins:");
     for (int i = 0; i < LED_COUNT; i++) Serial.printf(" led%d=%s", i + 1, pinName(cfg.ledPin[i]));
-    Serial.printf(" rx=%s carrier=%dHz\n", pinName(cfg.rxPin), IR_CARRIER_HZ);
+    Serial.printf(" rx=%s status=%s%s carrier=%dHz\n", pinName(cfg.rxPin), pinName(cfg.statusPin),
+                  cfg.statusInvert ? "(inv)" : "", IR_CARRIER_HZ);
 }
 
 static void printHelp() {
@@ -151,6 +182,11 @@ static void printHelp() {
         "  wifi connect | status | clear\n"
         "  send <addr> <cmd>            send NEC via all configured LEDs\n"
         "  raw <hex32>                  send raw 32-bit NEC word\n"
+        "recordings (any remote, e.g. AC):\n"
+        "  rec <name> [sec]             wait for the next key press and store it\n"
+        "  save <name>                  store the last received frame\n"
+        "  play <name>                  retransmit a recording\n"
+        "  list | del <name> | dump <name>\n"
         "test mode:\n"
         "  led <1-3> pin <P#|none>      assign GPIO to an IR LED\n"
         "  led <1-3> test [sec]         blink carrier on that LED only (watch via phone camera)\n"
@@ -159,6 +195,7 @@ static void printHelp() {
         "  rx pin <P#|none>             assign GPIO to the IR receiver\n"
         "  rx test [sec]                live readings: activity per second + decoded frames\n"
         "  rx scan [sec]                watch every candidate GPIO, report which one sees IR\n"
+        "  sled pin <P#|none> | sled invert on|off | sled test   (blue status LED)\n"
         "  reset                        factory defaults (pins + wifi)\n"
         "  reboot");
 }
@@ -193,6 +230,7 @@ void appBlinkPin(uint8_t pin, uint32_t seconds) {
     tx.burst(200, 200, seconds * 1000);
     applyTxPins();
     if (rxWasHere) applyRxPin();
+    appApplyStatusLed();
 }
 
 static void ledScan(uint32_t secPerPin) {
@@ -211,6 +249,7 @@ static void ledScan(uint32_t secPerPin) {
     }
     applyTxPins();
     applyRxPin();
+    appApplyStatusLed();
     Serial.println("led scan done. Assign with: led <n> pin P#");
 }
 
@@ -226,7 +265,7 @@ static void rxTest(uint32_t seconds) {
     uint32_t pulses[IrReceiver::MAX_EDGES];
     while ((int32_t)(millis() - end) < 0) {
         IrFrame f;
-        if (rx.poll(f)) { printFrame(f); recordFrame(f); }
+        if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) { lastN = f.pulses; printFrame(f); recordFrame(f); }
         // Peek raw timings while a frame is still buffered: copy on next poll instead
         if ((int32_t)(millis() - nextTick) >= 0) {
             nextTick += 1000;
@@ -266,6 +305,7 @@ void appRxScan(uint32_t seconds, ScanResult &r) {
     }
     tx.setPins(ledPins, nLed);
     applyRxPin();
+    appApplyStatusLed();
 }
 
 static void rxScan(uint32_t seconds) {
@@ -282,6 +322,73 @@ static void rxScan(uint32_t seconds) {
                       pinName(CANDIDATE_PINS[r.best]), pinName(CANDIDATE_PINS[r.best]));
     else
         Serial.println("=> no IR activity seen on any pin");
+}
+
+// --------------------------------------------------------------- recordings
+
+static bool validName(const char *n) {
+    size_t l = strlen(n);
+    if (l == 0 || l > REC_NAME_LEN) return false;
+    for (size_t i = 0; i < l; i++) if (n[i] == ' ' || n[i] == '"' || n[i] == '\\') return false;
+    return true;
+}
+
+bool appSaveLast(const char *name, String &msg) {
+    if (!validName(name)) { msg = "name: 1-23 chars, no spaces"; return false; }
+    if (lastN < 3) { msg = "nothing captured yet"; return false; }
+    if (!recSave(name, lastCapture, lastN)) { msg = "save failed (32 slots full?)"; return false; }
+    msg = "saved '" + String(name) + "' (" + String(lastN) + " pulses)";
+    return true;
+}
+
+int appRecord(const char *name, uint32_t waitSec, String &msg) {
+    if (!validName(name)) { msg = "name: 1-23 chars, no spaces"; return -1; }
+    if (!rx.active()) { msg = "no receiver pin assigned (run rx scan)"; return -1; }
+    uint32_t end = millis() + waitSec * 1000;
+    IrFrame f;
+    while ((int32_t)(millis() - end) < 0) {
+        if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) {
+            lastN = f.pulses < IrReceiver::MAX_EDGES ? f.pulses : IrReceiver::MAX_EDGES;
+            if (lastN < 3) continue;                       // noise
+            printFrame(f); recordFrame(f);
+            return appSaveLast(name, msg) ? lastN : -1;
+        }
+        statusLedTick();
+        delay(1);
+    }
+    msg = "timeout: no IR received in " + String(waitSec) + " s";
+    return 0;
+}
+
+bool appPlay(const char *name, String &msg) {
+    int slot = recFind(name);
+    if (slot < 0) { msg = "no recording named '" + String(name) + "'"; return false; }
+    int n = recLoad(slot, playBuf, REC_MAX_PULSES);
+    if (n <= 0) { msg = "recording unreadable"; return false; }
+    if (tx.pinCount() == 0) { msg = "no LED pins assigned"; return false; }
+    rx.end();
+    tx.sendTimings(playBuf, n);
+    applyRxPin();
+    appStatusBlink(150);
+    msg = "played '" + String(name) + "' (" + String(n) + " pulses)";
+    return true;
+}
+
+static void listRecordings() {
+    RecInfo info[REC_SLOTS];
+    int n = recList(info, REC_SLOTS);
+    if (n == 0) { Serial.println("no recordings (use: rec <name>)"); return; }
+    Serial.println("slot  name                     pulses  ms");
+    for (int i = 0; i < n; i++)
+        Serial.printf("%-5d %-24s %-7u %lu\n", info[i].slot, info[i].name, info[i].pulses, (unsigned long)info[i].durationMs);
+}
+
+static void dumpRecording(const char *name) {
+    int slot = recFind(name);
+    if (slot < 0) { Serial.println("not found"); return; }
+    int n = recLoad(slot, playBuf, REC_MAX_PULSES);
+    Serial.printf("%s: %d pulses (us, mark first):\n", name, n);
+    for (int i = 0; i < n; i++) Serial.printf("%lu%s", (unsigned long)playBuf[i], (i + 1 < n) ? "," : "\n");
 }
 
 // ---------------------------------------------------------------- commands
@@ -312,7 +419,7 @@ static void handleCommand(const String &cmd) {
     if (c == "status") { printStatus(); return; }
     if (c == "reboot") { Serial.println("rebooting"); delay(100); lt_reboot(); return; }
     if (c == "reset") {
-        cfg.reset(); cfg.save(); applyTxPins(); applyRxPin();
+        cfg.reset(); cfg.save(); applyTxPins(); applyRxPin(); appApplyStatusLed();
         Serial.println("config reset to defaults"); printStatus(); return;
     }
 
@@ -333,6 +440,56 @@ static void handleCommand(const String &cmd) {
         }
         Serial.println("usage: wifi ssid <name> | wifi pass <pw> | wifi connect | wifi status | wifi clear");
         return;
+    }
+
+    if (c == "rec" || c == "record") {
+        if (n < 2) { Serial.println("usage: rec <name> [sec]   - waits for the next remote key press and stores it"); return; }
+        Serial.printf("recording '%s': press the key on the remote now (%lus)...\n", t[1].c_str(), (unsigned long)argSeconds(t, n, 2, 15));
+        String msg; appRecord(t[1].c_str(), argSeconds(t, n, 2, 15), msg); Serial.println(msg); return;
+    }
+    if (c == "save") {
+        if (n < 2) { Serial.println("usage: save <name>   - stores the last received frame"); return; }
+        String msg; appSaveLast(t[1].c_str(), msg); Serial.println(msg); return;
+    }
+    if (c == "play") {
+        if (n < 2) { Serial.println("usage: play <name>"); return; }
+        String msg; appPlay(t[1].c_str(), msg); Serial.println(msg); return;
+    }
+    if (c == "list") { listRecordings(); return; }
+    if (c == "fake") {                       // synthetic NEC 0x04/0x08 capture, for testing the storage path
+        uint32_t w = 0x04 | (0xFB << 8) | (0x08 << 16) | (0xF7 << 24);
+        int k = 0; lastCapture[k++] = 9000; lastCapture[k++] = 4500;
+        for (int i = 0; i < 32; i++) { lastCapture[k++] = 562; lastCapture[k++] = (w >> i) & 1 ? 1687 : 562; }
+        lastCapture[k++] = 562; lastN = k;
+        Serial.printf("fake capture loaded (%d pulses)\n", lastN); return;
+    }
+    if (c == "del" || c == "delete") {
+        if (n < 2) { Serial.println("usage: del <name>"); return; }
+        Serial.println(recErase(t[1].c_str()) ? "deleted" : "not found"); return;
+    }
+    if (c == "dump") {
+        if (n < 2) { Serial.println("usage: dump <name>"); return; }
+        dumpRecording(t[1].c_str()); return;
+    }
+    if (c == "sled") {
+        if (n >= 3 && t[1] == "pin") {
+            uint8_t p;
+            if (!parsePin(t[2], p)) { Serial.println("bad pin"); return; }
+            if (p == 10 || p == 11) { Serial.println("P10/P11 are the serial console, refusing"); return; }
+            if (cfg.statusPin != NO_PIN) pinMode(cfg.statusPin, INPUT);
+            cfg.statusPin = p; cfg.save(); appApplyStatusLed();
+            Serial.printf("status led pin=%s saved\n", pinName(p)); return;
+        }
+        if (n >= 3 && t[1] == "invert") {
+            cfg.statusInvert = (t[2] == "on" || t[2] == "1" || t[2] == "true"); cfg.save();
+            Serial.printf("status led invert=%s saved\n", cfg.statusInvert ? "on" : "off"); return;
+        }
+        if (n >= 2 && t[1] == "test") {
+            Serial.println("status led: 5 blinks");
+            for (int i = 0; i < 5; i++) { statusWrite(true); delay(200); statusWrite(false); delay(200); }
+            return;
+        }
+        Serial.println("usage: sled pin <P#|none> | sled invert on|off | sled test"); return;
     }
 
     if (c == "send") {
@@ -397,6 +554,8 @@ void setup() {
     Serial.println();
     Serial.println("=== IR blaster (CB3S / BK7231N) ===");
     cfg.load();
+    appApplyStatusLed();
+    for (int i = 0; i < 3; i++) { statusWrite(true); delay(100); statusWrite(false); delay(100); }
     tx.setCarrier(IR_CARRIER_HZ);
     applyTxPins();
     applyRxPin();
@@ -407,7 +566,11 @@ void setup() {
 
 void loop() {
     IrFrame f;
-    if (rx.poll(f)) { printFrame(f); recordFrame(f); }
+    if (rx.poll(f, lastCapture, IrReceiver::MAX_EDGES)) {
+        lastN = f.pulses < IrReceiver::MAX_EDGES ? f.pulses : IrReceiver::MAX_EDGES;
+        printFrame(f); recordFrame(f); appStatusBlink(80);
+    }
+    statusLedTick();
     webLoop();
 
     if (cfg.hasWifi()) {

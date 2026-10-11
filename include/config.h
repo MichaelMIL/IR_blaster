@@ -10,6 +10,8 @@ struct DeviceConfig {
     String  pass;
     uint8_t ledPin[LED_COUNT];   // GPIO per IR LED, NO_PIN if unused
     uint8_t rxPin;               // GPIO of the IR receiver output
+    uint8_t statusPin;           // GPIO of the status LED (blue), NO_PIN to disable
+    bool    statusInvert;        // true if the LED is on when the pin is LOW
 
     void load();
     void save() const;

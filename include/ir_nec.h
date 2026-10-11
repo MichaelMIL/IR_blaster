@@ -1,7 +1,9 @@
 // Dependency-free IR capture + NEC encoder/decoder for LibreTiny (BK7231N).
 //
 // Receiver: interrupt driven. Every edge on the RX pin is timestamped into a
-// ring buffer; a frame ends on >20 ms of silence or when the buffer is full.
+// buffer; a frame ends on >80 ms of silence or when the buffer is full. The
+// 80 ms keeps multi-part AC frames (gaps of 10-40 ms) together as one capture
+// while NEC repeats (98 ms apart) stay separate.
 // Frames are decoded as NEC when possible, otherwise exposed as raw timings.
 //
 // Sender: bit-bangs a carrier on up to 3 GPIOs at once.
@@ -21,15 +23,15 @@ struct IrFrame {
 
 class IrReceiver {
 public:
-    static constexpr int MAX_EDGES = 120;
+    static constexpr int MAX_EDGES = 800;   // enough for multi-part AC frames
 
     void begin(uint8_t pin);
     void end();
     bool active() const { return _pin != 255; }
     uint8_t pin() const { return _pin; }
 
-    bool poll(IrFrame &out);                       // true when a frame is ready
-    int  copyPulses(uint32_t *dst, int max) const; // raw timings of last frame (µs)
+    // true when a frame is ready; optionally copies its raw timings (µs, mark first)
+    bool poll(IrFrame &out, uint32_t *timings = nullptr, int max = 0);
     uint32_t edgeCount() const { return _totalEdges; }
 
 private:
@@ -54,6 +56,7 @@ public:
     void setCarrier(uint32_t hz);
     int  pinCount() const { return _count; }
 
+    void sendTimings(const uint32_t *t, int n);   // raw mark/space list, mark first
     void sendNec(uint8_t address, uint8_t command);
     void sendNecRaw(uint32_t word);
     void sendRepeat();

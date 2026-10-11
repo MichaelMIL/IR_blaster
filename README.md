@@ -73,6 +73,11 @@ Pins are assigned at runtime from the serial console and stored in flash
 Candidate GPIOs on the CB3S: P6 P7 P8 P9 P14 P20 P21 P22 P23 P24 P26.
 P10/P11 are the serial console and are refused.
 
+Known so far on this board: **P8 drives the blue status LED** (configured as
+`sled pin P8`; the firmware blinks it 3x at boot, 1 Hz while connecting to
+WiFi, steady when connected, and flashes it on IR send/receive). The receiver
+pin is not known yet (`rx=none` by default); find it with `rx scan`.
+
 ### Finding the pins (test mode)
 
 ```
@@ -89,6 +94,29 @@ A working receiver idles HIGH. `rx test` printing `idle level: LOW` and
 `0 edges/s` means that GPIO is not the receiver output. If the three LEDs are
 driven by one transistor, only one GPIO will blink them all; leave the other two
 as `none`.
+
+## Recording any remote (air conditioners etc.)
+
+AC remotes do not use NEC; they send long multi-part frames. The receiver
+captures the whole key press as raw mark/space timings (up to 800 pulses,
+parts closer than 80 ms are kept together) and recordings are stored by name
+in flash (32 slots, 4 KiB each, in the `userdata` partition).
+
+```
+rec ac_cool_24          # waits up to 15 s for the next key press, then stores it
+save ac_cool_24         # alternative: store the last frame that was received
+list                    # names, pulse counts, lengths
+play ac_cool_24         # retransmit through all configured LEDs
+dump ac_cool_24         # print the raw timings (µs, mark first) for export
+del ac_cool_24
+```
+
+The web page has the same under **Recordings**, and `POST /api/play?name=…`
+is what a Home Assistant REST command would call.
+
+Tip: AC remotes transmit their *entire state* (mode, temperature, fan, swing)
+on every key press, so record one entry per state you want, e.g.
+`ac_off`, `ac_cool_24`, `ac_cool_22`, `ac_heat_26`.
 
 ## WiFi
 
@@ -109,6 +137,8 @@ an HTTP or MQTT endpoint for `send`.
 status                     firmware / wifi / pin summary
 send <addr> <cmd>          NEC with inverse bytes on all configured LEDs, e.g. send 0x04 0x08
 raw <hex32>                full 32-bit NEC word as printed by the receiver
+rec <name> [sec]           save <name>   play <name>   list   del <name>   dump <name>
+sled pin <P#|none>         sled invert on|off     sled test        (blue status LED)
 led <1-3> pin <P#|none>    led <1-3> test [sec]   led all test [sec]   led scan [sec]
 rx pin <P#|none>           rx test [sec]          rx scan [sec]
 reset                      reboot                 help
@@ -121,9 +151,26 @@ RX NEC addr=0x04 cmd=0x08 raw=0xF708FB04
 RX raw 36 pulses (not NEC)         <- another protocol; still proves the pin
 ```
 
+## Web page
+
+Once on WiFi: `http://ir-blaster.local/` (or the IP printed on the console).
+Panels: Send, Received (live, with one-click replay), Recordings, Pins (with
+"Find LEDs" / "Find receiver" helpers and status-LED settings), WiFi, Status.
+
+JSON API behind it (all `POST` take query-string arguments):
+
+```
+GET  /api/status            GET  /api/received          GET  /api/recordings
+POST /api/send?addr=&cmd=   POST /api/send?raw=0x…      POST /api/play?name=
+POST /api/record?name=&sec= POST /api/record/last?name= POST /api/recordings/delete?name=
+POST /api/pins?led1=&led2=&led3=&rx=&status=&status_invert=
+POST /api/test?led=1|2|3|all&sec=   POST /api/blink?pin=&sec=   POST /api/scan?sec=
+POST /api/wifi?ssid=&pass=  POST /api/reboot
+```
+
 ## Next steps
 
-- HTTP / MQTT endpoint so Home Assistant can call `send`
+- MQTT / Home Assistant discovery so recordings show up as buttons
 - Add more protocols (Samsung, Sony SIRC, RC5, raw timing capture/replay)
 - OTA updates via `ArduinoOTA` or the LibreTiny OTA helper
 

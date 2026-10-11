@@ -9,7 +9,10 @@
 #define IR_TX_PIN 26
 #endif
 #ifndef IR_RX_PIN
-#define IR_RX_PIN 8
+#define IR_RX_PIN 255          // unknown until `rx scan`
+#endif
+#ifndef STATUS_LED_PIN
+#define STATUS_LED_PIN 8       // blue LED on this board
 #endif
 #ifndef FLASH_USERDATA_OFFSET
 #error "FLASH_USERDATA_OFFSET not defined by the board"
@@ -25,10 +28,12 @@ struct __attribute__((packed)) StoredConfig {
     char     pass[65];
     uint8_t  ledPin[LED_COUNT];
     uint8_t  rxPin;
+    uint8_t  statusPin;
+    uint8_t  statusInvert;
     uint32_t crc;
 };
 static constexpr uint32_t CFG_MAGIC   = 0x49524231;   // "IRB1"
-static constexpr uint16_t CFG_VERSION = 1;
+static constexpr uint16_t CFG_VERSION = 2;
 static constexpr uint32_t CFG_OFFSET  = FLASH_USERDATA_OFFSET;
 
 static uint32_t crc32(const uint8_t *p, size_t n) {
@@ -46,6 +51,8 @@ void DeviceConfig::reset() {
     ledPin[0] = IR_TX_PIN;
     for (int i = 1; i < LED_COUNT; i++) ledPin[i] = NO_PIN;
     rxPin = IR_RX_PIN;
+    statusPin = STATUS_LED_PIN;
+    statusInvert = false;
 }
 
 void DeviceConfig::load() {
@@ -63,6 +70,8 @@ void DeviceConfig::load() {
     pass = s.pass;
     for (int i = 0; i < LED_COUNT; i++) ledPin[i] = s.ledPin[i];
     rxPin = s.rxPin;
+    statusPin = s.statusPin;
+    statusInvert = s.statusInvert != 0;
 }
 
 void DeviceConfig::save() const {
@@ -74,6 +83,8 @@ void DeviceConfig::save() const {
     strncpy(s.pass, pass.c_str(), sizeof(s.pass) - 1);
     for (int i = 0; i < LED_COUNT; i++) s.ledPin[i] = ledPin[i];
     s.rxPin = rxPin;
+    s.statusPin = statusPin;
+    s.statusInvert = statusInvert ? 1 : 0;
     s.crc = crc32((uint8_t *)&s, sizeof(s) - sizeof(s.crc));
 
     if (!lt_flash_erase_block(CFG_OFFSET)) { Serial.println("config: erase failed"); return; }

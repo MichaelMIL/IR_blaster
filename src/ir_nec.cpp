@@ -7,7 +7,8 @@ static constexpr uint32_t NEC_RPT_SPACE  = 2250;
 static constexpr uint32_t NEC_BIT_MARK   = 562;
 static constexpr uint32_t NEC_ONE_SPACE  = 1687;
 static constexpr uint32_t NEC_ZERO_SPACE = 562;
-static constexpr uint32_t FRAME_GAP      = 20000;   // silence that ends a frame
+static constexpr uint32_t FRAME_GAP      = 80000;   // silence that ends a capture
+static constexpr uint32_t TX_GAP         = 40000;   // silence appended after a transmission
 
 static inline bool near(uint32_t v, uint32_t target, uint32_t pct = 30) {
     uint32_t tol = target * pct / 100;
@@ -57,7 +58,7 @@ void IrReceiver::onEdge() {
     if (_count == MAX_EDGES) _frameReady = true;
 }
 
-bool IrReceiver::poll(IrFrame &out) {
+bool IrReceiver::poll(IrFrame &out, uint32_t *timings, int max) {
     if (_pin == 255) return false;
     // Frame ended by silence but no new edge has arrived yet to flag it.
     if (!_frameReady && _count > 0 && (micros() - _lastEdge) > FRAME_GAP) {
@@ -68,15 +69,10 @@ bool IrReceiver::poll(IrFrame &out) {
     out = IrFrame{};
     out.pulses  = _count;
     out.decoded = decodeNec(out);
+    if (timings) { int n = _count < max ? _count : max; for (int i = 0; i < n; i++) timings[i] = _edges[i]; }
     _count = 0;
     _frameReady = false;
     return true;
-}
-
-int IrReceiver::copyPulses(uint32_t *dst, int max) const {
-    int n = _count < max ? _count : max;
-    for (int i = 0; i < n; i++) dst[i] = _edges[i];
-    return n;
 }
 
 bool IrReceiver::decodeNec(IrFrame &out) const {
@@ -158,7 +154,16 @@ void IrSender::mark(uint32_t us) {
 
 void IrSender::space(uint32_t us) {
     writeAll(LOW);
+    while (us > 10000) { delayMicroseconds(10000); us -= 10000; }
     delayMicroseconds(us);
+}
+
+void IrSender::sendTimings(const uint32_t *t, int n) {
+    if (_count == 0 || n <= 0) return;
+    for (int i = 0; i < n; i++) {
+        if (i & 1) space(t[i]); else mark(t[i]);
+    }
+    space(TX_GAP);
 }
 
 void IrSender::sendNecRaw(uint32_t word) {
@@ -170,7 +175,7 @@ void IrSender::sendNecRaw(uint32_t word) {
         space((word >> i) & 1 ? NEC_ONE_SPACE : NEC_ZERO_SPACE);
     }
     mark(NEC_BIT_MARK);
-    space(FRAME_GAP);
+    space(TX_GAP);
 }
 
 void IrSender::sendNec(uint8_t address, uint8_t command) {
@@ -186,7 +191,7 @@ void IrSender::sendRepeat() {
     mark(NEC_HDR_MARK);
     space(NEC_RPT_SPACE);
     mark(NEC_BIT_MARK);
-    space(FRAME_GAP);
+    space(TX_GAP);
 }
 
 void IrSender::burst(uint32_t onMs, uint32_t offMs, uint32_t totalMs) {
