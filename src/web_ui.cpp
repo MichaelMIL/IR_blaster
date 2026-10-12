@@ -194,12 +194,36 @@ button{padding:22px 10px;border:1px solid var(--line);border-radius:14px;backgro
 button:active{transform:scale(.96);background:#262c38}button.ok{background:#1d3b2c;border-color:var(--ok)}button.bad{background:#3b1d1d;border-color:var(--bad)}
 .empty{grid-column:1/-1;color:var(--mute);text-align:center;padding:40px 10px;font-size:15px}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#262c38;padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
+#ac{max-width:520px;margin:0 auto 6px;padding:8px 14px 0}
+.acrow{display:flex;align-items:center;gap:12px}.actemp{flex:1;font-size:56px;font-weight:700;line-height:1;padding:6px 0}.unit{font-size:22px;color:var(--mute);margin-left:4px}
+.acpm{display:flex;flex-direction:column;gap:8px}.pm{min-height:0;padding:10px 0;width:64px;font-size:26px;line-height:1}
+.pow{min-height:0;width:76px;height:76px;border-radius:50%;font-size:30px;padding:0}.pow.on{background:#1d3b2c;border-color:var(--ok);color:var(--ok)}
+.acline{display:flex;gap:8px;margin-top:10px}.acline button{flex:1;min-height:0;padding:12px 4px;font-size:14px;font-weight:500}.acline button.cur{background:#1f2d4a;border-color:var(--acc);color:#cfe0ff}
+.acstate{color:var(--mute);font-size:13px;margin:8px 0 2px}
+#ac.off .actemp,#ac.off .acline,#ac.off .acpm{opacity:.45}
 </style></head><body>
 <header><h1 id="title">Remote</h1><a href="/">settings</a></header>
+<section id="ac">
+ <div class="acrow"><div class="actemp"><span id="actval">--</span><span class="unit">°C</span></div>
+  <div class="acpm"><button class="pm" onclick="acTemp(1)">+</button><button class="pm" onclick="acTemp(-1)">−</button></div>
+  <button id="acpow" class="pow" onclick="acPower()">⏻</button></div>
+ <div class="acline" id="acmodes"></div>
+ <div class="acline" id="acfans"></div>
+ <div class="acstate" id="acstate"></div>
+</section>
 <main id="grid"><div class="empty">loading…</div></main>
 <div id="toast"></div>
 <script>
 const $=id=>document.getElementById(id);let toastT;
+const MODES=['cool','heat','dry','fan','auto'],FANS=['auto','low','med','high'];let ac=null,acBusy=false;
+function acRender(){if(!ac)return;$('actval').textContent=ac.temp;$('acpow').classList.toggle('on',ac.power==='on');$('ac').classList.toggle('off',ac.power!=='on');
+ $('acmodes').innerHTML=MODES.map(m=>`<button class="${ac.mode===m?'cur':''}" onclick="acSet({mode:'${m}'})">${m}</button>`).join('');
+ $('acfans').innerHTML=FANS.map(f=>`<button class="${ac.fan===f?'cur':''}" onclick="acSet({fan:'${f}'})">fan ${f}</button>`).join('');
+ $('acstate').textContent=ac.power==='on'?`${ac.mode} · ${ac.temp}°C · fan ${ac.fan}`:'AC off'}
+async function acLoad(){try{ac=await (await fetch('/api/ac')).json();acRender()}catch(e){}}
+async function acSet(q){if(acBusy)return;acBusy=true;try{const u=new URL('/api/ac',location.href);for(const k in q)u.searchParams.set(k,q[k]);const j=await (await fetch(u,{method:'POST'})).json();if(j.ok){ac=j.state;acRender()}toast(j.message,!j.ok)}catch(e){toast('no response',true)}acBusy=false}
+function acTemp(d){if(!ac)return;const t=Math.min(31,Math.max(16,ac.temp+d));acSet({temp:t})}
+function acPower(){if(!ac)return;acSet({power:ac.power==='on'?'off':'on'})}
 function toast(m,bad){const t=$('toast');t.textContent=m;t.style.opacity=1;t.style.borderLeft=bad?'3px solid #ff5c5c':'3px solid #3ddc84';clearTimeout(toastT);toastT=setTimeout(()=>t.style.opacity=0,1500)}
 async function load(){try{const r=await (await fetch('/api/buttons')).json();const g=$('grid');
  if(!r.length){g.innerHTML='<div class="empty">No buttons yet.<br>Add some under <a href="/" style="color:#4f8cff">settings</a>.</div>';return}
@@ -207,7 +231,7 @@ async function load(){try{const r=await (await fetch('/api/buttons')).json();con
  g.querySelectorAll('button').forEach(el=>el.addEventListener('click',()=>press(el)))}catch(e){$('grid').innerHTML='<div class="empty">device unreachable</div>'}}
 async function press(el){if(el.disabled)return;el.disabled=true;try{const r=await fetch('/api/button?id='+el.dataset.i,{method:'POST'});const j=await r.json();el.classList.add(j.ok?'ok':'bad');toast(j.message,!j.ok)}catch(e){el.classList.add('bad');toast('no response',true)}
  setTimeout(()=>{el.classList.remove('ok','bad');el.disabled=false},350)}
-load();
+load();acLoad();setInterval(acLoad,10000);
 </script></body></html>
 )HTML";
 
