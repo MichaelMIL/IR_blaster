@@ -196,16 +196,17 @@ button:active{transform:scale(.96);background:#262c38}button.ok{background:#1d3b
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#262c38;padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
 #ac{max-width:520px;margin:0 auto 6px;padding:8px 14px 0}
 .acrow{display:flex;align-items:center;gap:12px}.actemp{flex:1;font-size:56px;font-weight:700;line-height:1;padding:6px 0}.unit{font-size:22px;color:var(--mute);margin-left:4px}
-.acpm{display:flex;flex-direction:column;gap:8px}.pm{min-height:0;padding:10px 0;width:64px;font-size:26px;line-height:1}
+.acpm{display:flex;flex-direction:column;gap:8px}.pm{min-height:0;padding:11px 0;width:64px;font-size:20px;line-height:1}
 .pow{min-height:0;width:76px;height:76px;border-radius:50%;font-size:30px;padding:0}.pow.on{background:#1d3b2c;border-color:var(--ok);color:var(--ok)}
-.acline{display:flex;gap:8px;margin-top:10px}.acline button{flex:1;min-height:0;padding:12px 4px;font-size:14px;font-weight:500}.acline button.cur{background:#1f2d4a;border-color:var(--acc);color:#cfe0ff}
+.acline{display:flex;gap:8px;margin-top:10px}.acline button{flex:1;min-height:0;padding:8px 2px 7px;font-size:12px;font-weight:500;color:var(--mute)}.acline button.cur{color:#cfe0ff}
+.ico{display:block;font-size:22px;line-height:1.2;margin-bottom:3px;color:var(--fg)}.ico.fan{font-size:16px;letter-spacing:1px;line-height:1.6}.acline button.cur{background:#1f2d4a;border-color:var(--acc);color:#cfe0ff}
 .acstate{color:var(--mute);font-size:13px;margin:8px 0 2px}
 #ac.off .actemp,#ac.off .acline,#ac.off .acpm{opacity:.45}
 </style></head><body>
 <header><h1 id="title">Remote</h1><a href="/">settings</a></header>
 <section id="ac">
  <div class="acrow"><div class="actemp"><span id="actval">--</span><span class="unit">°C</span></div>
-  <div class="acpm"><button class="pm" onclick="acTemp(1)">+</button><button class="pm" onclick="acTemp(-1)">−</button></div>
+  <div class="acpm"><button class="pm" onclick="acTemp(1)" title="warmer">▲</button><button class="pm" onclick="acTemp(-1)" title="cooler">▼</button></div>
   <button id="acpow" class="pow" onclick="acPower()">⏻</button></div>
  <div class="acline" id="acmodes"></div>
  <div class="acline" id="acfans"></div>
@@ -215,10 +216,10 @@ button:active{transform:scale(.96);background:#262c38}button.ok{background:#1d3b
 <div id="toast"></div>
 <script>
 const $=id=>document.getElementById(id);let toastT;
-const MODES=['cool','heat','dry','fan','auto'],FANS=['auto','low','med','high'];let ac=null,acBusy=false;
+const MODES=[['cool','❄'],['heat','☀'],['dry','💧'],['fan','🌀'],['auto','Ⓐ']],FANS=[['auto','Ⓐ'],['low','▂'],['med','▂▅'],['high','▂▅█']];let ac=null,acBusy=false;
 function acRender(){if(!ac)return;$('actval').textContent=ac.temp;$('acpow').classList.toggle('on',ac.power==='on');$('ac').classList.toggle('off',ac.power!=='on');
- $('acmodes').innerHTML=MODES.map(m=>`<button class="${ac.mode===m?'cur':''}" onclick="acSet({mode:'${m}'})">${m}</button>`).join('');
- $('acfans').innerHTML=FANS.map(f=>`<button class="${ac.fan===f?'cur':''}" onclick="acSet({fan:'${f}'})">fan ${f}</button>`).join('');
+ $('acmodes').innerHTML=MODES.map(([m,i])=>`<button class="${ac.mode===m?'cur':''}" onclick="acSet({mode:'${m}'})"><span class="ico">${i}</span>${m}</button>`).join('');
+ $('acfans').innerHTML=FANS.map(([f,i])=>`<button class="${ac.fan===f?'cur':''}" onclick="acSet({fan:'${f}'})"><span class="ico fan">${i}</span>${f}</button>`).join('');
  $('acstate').textContent=ac.power==='on'?`${ac.mode} · ${ac.temp}°C · fan ${ac.fan}`:'AC off'}
 async function acLoad(){try{ac=await (await fetch('/api/ac')).json();acRender()}catch(e){}}
 async function acSet(q){if(acBusy)return;acBusy=true;try{const u=new URL('/api/ac',location.href);for(const k in q)u.searchParams.set(k,q[k]);const j=await (await fetch(u,{method:'POST'})).json();if(j.ok){ac=j.state;acRender()}toast(j.message,!j.ok)}catch(e){toast('no response',true)}acBusy=false}
