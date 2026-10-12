@@ -216,19 +216,27 @@ fail with "No route to host".
 ```
 
 It opens `http://127.0.0.1:8765/`, follows the device's capture stream and
-lists every frame as it arrives, with its decode and LSB-first bytes. Then:
+lists every frame as it arrives in a **state table**: one dropdown per column
+(Power, Mode, Temp 16-30, Fan, Swing, Extra). The tag is generated from the
+row, e.g. `cool_22_auto_off`, `heat_24_high_off_sleep`, `off`.
 
-- **Tag** each capture: click a preset chip (power, cool, heat, temp_up, …)
-  or type a custom tag; the *next* capture gets it, or click a row first to
-  tag that one. "auto-increment" turns `cool_22` into `cool_23`, `cool_24` …
-  for sweeping a temperature range.
-- **play** a capture through the device, **to device** uploads a tagged
-  capture as a recording (so it appears on `/remote` and in Home Assistant),
-  "Upload all tagged" does them all.
-- **Compare two captures** highlights the bits that differ, which is how you
-  find the temperature / mode / checksum fields.
+- A new capture **copies the previous row's settings**; if that leaves it
+  identical to the previous row the **temperature steps up by one**. So
+  pressing "temp up" repeatedly tags `cool_22`, `cool_23`, `cool_24` … with
+  no typing; change a dropdown (mode, fan, …) on a row and the following
+  captures continue from there. The "Next capture" panel shows what the next
+  row will get.
+- **auto-upload** (on by default) stores every tagged capture on the device as
+  a recording, so it appears on `/remote` and in Home Assistant right away;
+  editing a row re-tags it and marks it for re-upload.
+- **play** replays a capture through the device; **Compare two captures**
+  highlights the bits that differ, which is how you find the temperature /
+  mode / checksum fields.
 - Everything is saved to the session file on every change; "Export for
   ir_analyze.py" writes `<session>_export.json`.
+
+Columns and options live in `COLUMNS` at the top of the script; edit them
+for a remote with other features.
 
 Device endpoint used for uploads: `POST /api/recordings/put?name=…` with the
 timings as a comma-separated body.

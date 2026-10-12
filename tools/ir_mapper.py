@@ -27,6 +27,37 @@ except Exception:
 
 # ----------------------------------------------------------------- state
 
+# Columns of the state table. Every capture row gets one dropdown per column.
+COLUMNS = [
+    {"key": "power", "label": "Power", "options": ["on", "off"]},
+    {"key": "mode",  "label": "Mode",  "options": ["cool", "heat", "dry", "fan", "auto"]},
+    {"key": "temp",  "label": "Temp",  "options": [str(t) for t in range(16, 31)]},
+    {"key": "fan",   "label": "Fan",   "options": ["auto", "low", "med", "high", "turbo"]},
+    {"key": "swing", "label": "Swing", "options": ["off", "on"]},
+    {"key": "extra", "label": "Extra", "options": ["-", "sleep", "eco", "light", "ifeel", "timer"]},
+]
+DEFAULT_STATE = {"power": "on", "mode": "cool", "temp": "22", "fan": "auto", "swing": "off", "extra": "-"}
+
+def tag_for(state):
+    if not state: return ""
+    if state.get("power") == "off":
+        return "off" + ("" if state.get("extra", "-") in ("-", "") else "_" + state["extra"])
+    parts = [state.get("mode", ""), state.get("temp", ""), state.get("fan", ""), state.get("swing", "")]
+    if state.get("extra", "-") not in ("-", ""): parts.append(state["extra"])
+    return "_".join(p for p in parts if p)
+
+def next_state(prev):
+    """New row = copy of the previous row; identical settings -> temperature + 1."""
+    st = dict(prev or DEFAULT_STATE)
+    if prev is not None and st == prev:
+        temps = COLUMNS[2]["options"]
+        try:
+            i = temps.index(str(st.get("temp")))
+            st["temp"] = temps[min(i + 1, len(temps) - 1)]
+        except ValueError:
+            st["temp"] = temps[0]
+    return st
+
 class Session:
     def __init__(self, path, host):
         self.path = path
@@ -56,9 +87,11 @@ class Session:
 
     def add(self, c):
         with self.lock:
+            prev = self.captures[-1].get("state") if self.captures else None
+            st = next_state(prev)
             rec = {"id": self.next_id, "device_id": c["id"], "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                    "type": c["type"], "pulses": c["pulses"], "timings": c["timings"],
-                   "tag": "", "note": "", "uploaded": False}
+                   "state": st, "tag": tag_for(st), "note": "", "uploaded": False}
             if c["type"] == "nec":
                 rec.update(addr=c["addr"], cmd=c["cmd"], raw="0x%08X" % c["raw"])
             rec["decode"] = decode_summary(c["timings"])
@@ -71,8 +104,16 @@ class Session:
         with self.lock:
             for c in self.captures:
                 if c["id"] == cid:
-                    for k in ("tag", "note", "uploaded"):
+                    for k in ("note", "uploaded"):
                         if k in fields: c[k] = fields[k]
+                    if "state" in fields:
+                        st = dict(c.get("state") or DEFAULT_STATE)
+                        for col in COLUMNS:
+                            v = fields["state"].get(col["key"])
+                            if v in col["options"]: st[col["key"]] = v
+                        c["state"] = st; c["tag"] = tag_for(st); c["uploaded"] = False
+                    elif "tag" in fields:
+                        c["tag"] = fields["tag"]; c["uploaded"] = False
                     self.save(); return c
         return None
 
@@ -158,7 +199,7 @@ main{padding:14px 18px;display:grid;gap:14px;grid-template-columns:300px 1fr}
 section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
 h2{font-size:12px;margin:0 0 10px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em}
 button{padding:6px 10px;border:0;border-radius:6px;background:var(--acc);color:#fff;font:inherit;cursor:pointer}button.sec{background:#2a2f3a}button.sm{padding:3px 8px;font-size:12px}button:disabled{opacity:.5}
-input,select,textarea{padding:6px 8px;background:#0c0e12;border:1px solid var(--line);border-radius:6px;color:var(--fg);font:inherit;width:100%}
+td select{width:auto;padding:3px 4px}input,select,textarea{padding:6px 8px;background:#0c0e12;border:1px solid var(--line);border-radius:6px;color:var(--fg);font:inherit;width:100%}
 table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 5px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--mute);font-weight:500;white-space:nowrap}
 tr.new td{background:#1d2a1f}tr.sel td{background:#1d2436}
 code,.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
@@ -172,12 +213,10 @@ code,.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
 <header><h1>IR key mapper <span style="color:var(--mute);font-weight:400" id="sess"></span></h1><div id="dev"><span class="dot"></span>connecting…</div></header>
 <main>
 <div style="display:grid;gap:14px;align-content:start">
-<section><h2>Quick tags <span style="text-transform:none;letter-spacing:0">(click, then the next capture gets it — or click a row first)</span></h2>
- <div class="row" style="margin-bottom:8px"><input id="prefix" value="ac" placeholder="prefix" style="width:90px"><label style="font-size:12px;color:var(--mute)">prefix for preset names</label></div>
- <div class="chips" id="chips"></div>
- <div class="row" style="margin-top:10px"><input id="custom" placeholder="custom tag (e.g. cool_22)"><button class="sm" onclick="setPending($('custom').value)">use</button></div>
- <div id="pending" style="margin-top:8px;font-size:13px;color:var(--mute)">next capture tag: <span class="tag">(none)</span></div>
- <div class="row" style="margin-top:8px"><label style="font-size:12px;color:var(--mute)"><input type="checkbox" id="autoinc" style="width:auto"> auto-increment numbers (cool_22 → cool_23 …)</label></div>
+<section><h2>Next capture</h2>
+ <p style="margin:0 0 8px;color:var(--mute);font-size:12px">A new capture copies the previous row's settings; if nothing was changed the temperature steps up by one. Fix any dropdown on a row and the following captures continue from there.</p>
+ <div id="next" class="mono" style="font-size:13px"></div>
+ <div class="row" style="margin-top:10px"><label style="font-size:12px;color:var(--mute)"><input type="checkbox" id="autoup" checked style="width:auto"> auto-upload tagged captures to the device</label></div>
 </section>
 <section><h2>Session</h2>
  <div class="row"><button class="sec sm" onclick="exportAll()">Export for ir_analyze.py</button><button class="sec sm" onclick="uploadAll()">Upload all tagged to device</button></div>
@@ -190,30 +229,29 @@ code,.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
 </section>
 </div>
 <section><h2>Captures <span id="count" style="text-transform:none;letter-spacing:0"></span></h2>
- <table><thead><tr><th>#</th><th>time</th><th>tag</th><th>decode</th><th>bytes (LSB-first)</th><th>pulses</th><th></th></tr></thead><tbody id="rows"><tr><td colspan="7" style="color:var(--mute)">press a key on the remote…</td></tr></tbody></table>
+ <table><thead id="head"></thead><tbody id="rows"><tr><td colspan="12" style="color:var(--mute)">press a key on the remote…</td></tr></tbody></table>
 </section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const PRESETS=['power','on','off','cool','heat','dry','fan','auto','temp_up','temp_down','fan_low','fan_med','fan_high','fan_auto','swing','swing_h','sleep','timer','turbo','eco','light','ifeel'];
-let caps=[],pendingTag='',selected=null,lastSeen=0;
+let caps=[],cols=[],selected=null,lastSeen=0;
 function esc(s){return String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 async function api(p,{m='GET',q={},body}={}){const u=new URL(p,location.href);for(const k in q)u.searchParams.set(k,q[k]);const r=await fetch(u,{method:m,body:body?JSON.stringify(body):undefined,headers:body?{'Content-Type':'application/json'}:{}});const t=await r.text();try{return JSON.parse(t)}catch{return t}}
 function msg(m){$('msg').textContent=m}
-function renderChips(){$('chips').innerHTML=PRESETS.map(p=>`<span class="chip" onclick="setPending('${p}')">${p}</span>`).join('')}
-function fullTag(t){const pre=$('prefix').value.trim();return t&&pre&&!t.startsWith(pre+'_')?pre+'_'+t:t}
-function setPending(t){t=fullTag(t.trim());if(selected){tag(selected,t);selected=null;render();return}pendingTag=t;$('pending').innerHTML='next capture tag: <span class="tag">'+(t?esc(t):'(none)')+'</span>'}
-function bump(t){const m=t.match(/^(.*?)(\d+)$/);return m?m[1]+(parseInt(m[2])+1):t}
-async function tag(id,t){await api('/api/capture',{m:'POST',q:{id},body:{tag:t}});const c=caps.find(c=>c.id===id);if(c)c.tag=t}
-async function load(){const r=await api('/api/state');caps=r.captures;$('sess').textContent='· '+r.session;$('dev').innerHTML=`<span class="dot ${r.status.device==='connected'?'on':''}"></span>${r.host}: ${r.status.device}${r.status.device!=='connected'&&r.status.last_error?' ('+esc(r.status.last_error)+')':''}`;
- for(const c of caps){if(c.id>lastSeen){lastSeen=c.id;if(pendingTag&&!c.tag){await tag(c.id,pendingTag);if($('autoinc').checked){pendingTag=bump(pendingTag);$('pending').innerHTML='next capture tag: <span class="tag">'+esc(pendingTag)+'</span>'}else setPending('')}}}
+async function setState(id,key,val){const c=caps.find(c=>c.id===id);if(!c)return;const st=Object.assign({},c.state||{});st[key]=val;await api('/api/capture',{m:'POST',q:{id},body:{state:st}});await load();if($('autoup').checked)upload(id,true)}
+function sel(c,col){return `<select onclick="event.stopPropagation()" onchange="setState(${c.id},'${col.key}',this.value)">${col.options.map(o=>`<option ${((c.state||{})[col.key]===o)?'selected':''}>${o}</option>`).join('')}</select>`}
+async function load(){const r=await api('/api/state');caps=r.captures;cols=r.columns;$('sess').textContent='· '+r.session;$('dev').innerHTML=`<span class="dot ${r.status.device==='connected'?'on':''}"></span>${r.host}: ${r.status.device}${r.status.device!=='connected'&&r.status.last_error?' ('+esc(r.status.last_error)+')':''}`;
+ $('next').innerHTML=cols.map(c=>`<span style="color:var(--mute)">${c.label.toLowerCase()}</span> <b>${esc(r.next.state[c.key])}</b>`).join(' &nbsp; ')+`<br>tag: <span class="tag">${esc(r.next.tag)}</span>`;
+ for(const c of caps){if(c.id>lastSeen){lastSeen=c.id;if($('autoup').checked&&c.tag&&!c.uploaded)upload(c.id,true)}}
  render()}
-function render(){$('count').textContent=caps.length?`(${caps.length})`:'';const tb=$('rows');
- tb.innerHTML=caps.length?caps.slice().reverse().map(c=>{const d=c.decode&&c.decode.sections&&c.decode.sections[0]||{};const dec=c.type==='nec'?`NEC ${c.addr.toString(16).toUpperCase().padStart(2,'0')}/${c.cmd.toString(16).toUpperCase().padStart(2,'0')}`:(d.encoding?`${d.encoding}-coded ${d.bits?d.bits.length+' bits':''}${c.decode.sections.length>1?' ×'+c.decode.sections.length:''}`:c.type);
-  return `<tr class="${c.id===selected?'sel':''}${c.id===lastSeen&&!c.tag?' new':''}" onclick="selected=${c.id};render()"><td>${c.id}</td><td style="white-space:nowrap;color:var(--mute)">${c.ts.slice(11)}</td><td><input class="mono" value="${esc(c.tag)}" onclick="event.stopPropagation()" onchange="tag(${c.id},this.value)" placeholder="tag"></td><td style="white-space:nowrap">${dec}</td><td class="mono">${esc(d.bytes_lsb||'')}</td><td>${c.pulses}</td><td style="white-space:nowrap"><button class="sec sm" onclick="event.stopPropagation();play(${c.id})">play</button> <button class="sec sm" onclick="event.stopPropagation();upload(${c.id})" ${c.uploaded?'style="color:var(--ok)"':''}>${c.uploaded?'on device':'to device'}</button> <button class="sec sm" onclick="event.stopPropagation();del(${c.id})">✕</button></td></tr>`}).join(''):'<tr><td colspan="7" style="color:var(--mute)">press a key on the remote…</td></tr>';
+function render(){$('count').textContent=caps.length?`(${caps.length})`:'';
+ $('head').innerHTML='<tr><th>#</th><th>time</th>'+cols.map(c=>`<th>${c.label}</th>`).join('')+'<th>tag</th><th>decode</th><th>bytes (LSB-first)</th><th></th></tr>';
+ const tb=$('rows');
+ tb.innerHTML=caps.length?caps.slice().reverse().map(c=>{const d=c.decode&&c.decode.sections&&c.decode.sections[0]||{};const dec=c.type==='nec'?`NEC ${c.addr.toString(16).toUpperCase().padStart(2,'0')}/${c.cmd.toString(16).toUpperCase().padStart(2,'0')}`:(d.encoding?`${d.encoding} ${d.bits?d.bits.length+'b':''}${c.decode.sections.length>1?' ×'+c.decode.sections.length:''}`:c.type);
+  return `<tr class="${c.id===selected?'sel':''}${c.id===lastSeen?' new':''}" onclick="selected=${c.id};render()"><td>${c.id}</td><td style="white-space:nowrap;color:var(--mute)">${c.ts.slice(11)}</td>${cols.map(col=>`<td>${sel(c,col)}</td>`).join('')}<td class="mono tag" style="white-space:nowrap">${esc(c.tag)}${c.uploaded?' <span style="color:var(--ok)" title="on device">●</span>':''}</td><td style="white-space:nowrap">${dec}</td><td class="mono">${esc(d.bytes_lsb||'')}</td><td style="white-space:nowrap"><button class="sec sm" onclick="event.stopPropagation();play(${c.id})">play</button> <button class="sec sm" onclick="event.stopPropagation();upload(${c.id})">${c.uploaded?'re-up':'to device'}</button> <button class="sec sm" onclick="event.stopPropagation();del(${c.id})">✕</button></td></tr>`}).join(''):'<tr><td colspan="12" style="color:var(--mute)">press a key on the remote…</td></tr>';
  const opts=caps.map(c=>`<option value="${c.id}">#${c.id} ${esc(c.tag||'(untagged)')}</option>`).join('');if($('cmpA').innerHTML!==opts){$('cmpA').innerHTML=opts;$('cmpB').innerHTML=opts}}
 async function play(id){const r=await api('/api/play',{m:'POST',q:{id}});msg(r.message||JSON.stringify(r))}
-async function upload(id){const c=caps.find(c=>c.id===id);if(!c.tag)return msg('tag it first');const r=await api('/api/upload',{m:'POST',q:{id}});msg(r.message||JSON.stringify(r));load()}
+async function upload(id,quiet){const c=caps.find(c=>c.id===id);if(!c||!c.tag)return quiet?0:msg('tag it first');const r=await api('/api/upload',{m:'POST',q:{id}});msg(r.message||JSON.stringify(r));if(!quiet)load()}
 async function uploadAll(){let n=0;for(const c of caps){if(c.tag&&!c.uploaded){const r=await api('/api/upload',{m:'POST',q:{id:c.id}});if(r.ok)n++;msg(r.message)}}msg(`uploaded ${n} recording(s) to the device`);load()}
 async function del(id){await api('/api/capture',{m:'DELETE',q:{id}});load()}
 async function exportAll(){const r=await api('/api/export',{m:'POST'});msg(r.message)}
@@ -223,7 +261,7 @@ function compare(){const a=caps.find(c=>c.id==$('cmpA').value),b=caps.find(c=>c.
  const n=Math.max(ba.length,bb.length);let la='',lb='',lm='',diffs=[];for(let i=0;i<n;i++){const x=ba[i]||' ',y=bb[i]||' ';const d=x!==y;la+=d?`<span class="diff">${x}</span>`:x;lb+=d?`<span class="diff">${y}</span>`:y;lm+=d?'^':' ';if(d)diffs.push(i)}
  out=esc(out)+`A: ${la}\nB: ${lb}\n   ${lm}\n\n`;out+=diffs.length?`${diffs.length} bit(s) differ at positions ${diffs.join(', ')} (bit 0 = first transmitted). Byte index = position / 8.`:'identical bit streams';
  const sa=(a.decode.sections||[])[0]||{},sb=(b.decode.sections||[])[0]||{};if(sa.bytes_lsb&&sb.bytes_lsb)out+=`\n\nbytes A: ${sa.bytes_lsb}\nbytes B: ${sb.bytes_lsb}`;$('cmp').innerHTML=out}
-renderChips();load();setInterval(load,1000);
+load();setInterval(load,1000);
 </script></body></html>
 """
 
@@ -247,7 +285,11 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/state":
             with s.lock:
                 caps = [{k: v for k, v in c.items() if k != "timings"} for c in s.captures]
-            self._json({"captures": caps, "status": s.status, "host": s.host, "session": os.path.basename(s.path)})
+            with s.lock:
+                prev = s.captures[-1].get("state") if s.captures else None
+            nxt = next_state(prev)
+            self._json({"captures": caps, "status": s.status, "host": s.host, "session": os.path.basename(s.path),
+                        "columns": COLUMNS, "next": {"state": nxt, "tag": tag_for(nxt)}})
         else:
             self._json({"ok": False, "message": "not found"}, 404)
 
