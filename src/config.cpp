@@ -38,10 +38,11 @@ struct __attribute__((packed)) StoredConfig {
     uint16_t mqttPort;
     char     mqttUser[33];
     char     mqttPass[65];
+    uint8_t  acPower, acMode, acTemp, acFan;
     uint32_t crc;
 };
 static constexpr uint32_t CFG_MAGIC   = 0x49524231;   // "IRB1"
-static constexpr uint16_t CFG_VERSION = 4;
+static constexpr uint16_t CFG_VERSION = 5;
 static constexpr uint32_t CFG_OFFSET  = FLASH_USERDATA_OFFSET;
 
 static uint32_t crc32(const uint8_t *p, size_t n) {
@@ -63,6 +64,7 @@ void DeviceConfig::reset() {
     statusInvert = false;
     carrierHz = IR_CARRIER_HZ;
     mqttHost = ""; mqttPort = 1883; mqttUser = ""; mqttPass = "";
+    acPower = false; acMode = 2; acTemp = 24; acFan = 0;
 }
 
 void DeviceConfig::load() {
@@ -99,6 +101,22 @@ void DeviceConfig::load() {
         save();
         return;
     }
+    if (s.version == 4 && s.length == sizeof(s) - 4) {
+        struct __attribute__((packed)) V4 { uint32_t magic; uint16_t version, length; char ssid[33]; char pass[65];
+                                            uint8_t ledPin[LED_COUNT]; uint8_t rxPin, statusPin, statusInvert; uint32_t carrierHz;
+                                            char mqttHost[65]; uint16_t mqttPort; char mqttUser[33]; char mqttPass[65]; uint32_t crc; } v4;
+        lt_flash_read(CFG_OFFSET, (uint8_t *)&v4, sizeof(v4));
+        if (v4.crc != crc32((uint8_t *)&v4, sizeof(v4) - 4)) return;
+        v4.ssid[32] = 0; v4.pass[64] = 0; v4.mqttHost[64] = 0; v4.mqttUser[32] = 0; v4.mqttPass[64] = 0;
+        ssid = v4.ssid; pass = v4.pass;
+        for (int i = 0; i < LED_COUNT; i++) ledPin[i] = v4.ledPin[i];
+        rxPin = v4.rxPin; statusPin = v4.statusPin; statusInvert = v4.statusInvert != 0;
+        carrierHz = (v4.carrierHz >= 30000 && v4.carrierHz <= 60000) ? v4.carrierHz : IR_CARRIER_HZ;
+        mqttHost = v4.mqttHost; mqttPort = v4.mqttPort ? v4.mqttPort : 1883; mqttUser = v4.mqttUser; mqttPass = v4.mqttPass;
+        Serial.println("config: migrated from v4");
+        save();
+        return;
+    }
     if (s.version != CFG_VERSION || s.length != sizeof(s)) return;
     if (s.crc != crc32((uint8_t *)&s, sizeof(s) - sizeof(s.crc))) {
         Serial.println("config: bad checksum, using defaults");
@@ -115,6 +133,7 @@ void DeviceConfig::load() {
     carrierHz = (s.carrierHz >= 30000 && s.carrierHz <= 60000) ? s.carrierHz : IR_CARRIER_HZ;
     s.mqttHost[64] = 0; s.mqttUser[32] = 0; s.mqttPass[64] = 0;
     mqttHost = s.mqttHost; mqttPort = s.mqttPort ? s.mqttPort : 1883; mqttUser = s.mqttUser; mqttPass = s.mqttPass;
+    acPower = s.acPower != 0; acMode = s.acMode; acTemp = s.acTemp; acFan = s.acFan;
 }
 
 void DeviceConfig::save() const {
@@ -131,6 +150,7 @@ void DeviceConfig::save() const {
     s.carrierHz = carrierHz;
     strncpy(s.mqttHost, mqttHost.c_str(), 64); s.mqttPort = mqttPort;
     strncpy(s.mqttUser, mqttUser.c_str(), 32); strncpy(s.mqttPass, mqttPass.c_str(), 64);
+    s.acPower = acPower ? 1 : 0; s.acMode = acMode; s.acTemp = acTemp; s.acFan = acFan;
     s.crc = crc32((uint8_t *)&s, sizeof(s) - sizeof(s.crc));
 
     if (!lt_flash_erase_block(CFG_OFFSET)) { Serial.println("config: erase failed"); return; }

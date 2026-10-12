@@ -16,6 +16,7 @@ void   mqttBegin();
 void   mqttLoop();
 void   mqttPublishReceived(const RxRecord &r);
 void   mqttPublishDiscovery();     // call after buttons change
+void   mqttPublishAcState();
 void   mqttReconfigure();          // call after config change
 void   mqttSuspend();              // disconnect and stay off (used during OTA)
 void   mqttResume();

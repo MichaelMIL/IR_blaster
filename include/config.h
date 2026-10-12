@@ -17,6 +17,8 @@ struct DeviceConfig {
     uint16_t mqttPort;
     String   mqttUser;
     String   mqttPass;
+    bool     acPower;            // last AC state sent (so HA shows it after a reboot)
+    uint8_t  acMode, acTemp, acFan;
 
     void load();
     void save() const;

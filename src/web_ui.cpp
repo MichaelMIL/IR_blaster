@@ -8,6 +8,7 @@
 #include "recordings.h"
 #include "buttons.h"
 #include "mqtt.h"
+#include "ac.h"
 
 static WebServer server(80);
 static mDNS      mdns;
@@ -43,6 +44,14 @@ code{font-family:ui-monospace,Menlo,monospace;background:#0c0e12;padding:1px 5px
  <div class="row"><button onclick="sendNec()">Send NEC</button></div>
  <label>Raw 32-bit NEC word</label><div class="row"><input id="raw" placeholder="0xF708FB04"><button onclick="sendRaw()">Send raw</button></div>
  <div id="txmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
+</section>
+<section><h2>Air conditioner <span style="text-transform:none;letter-spacing:0;color:var(--mute)">(native protocol)</span></h2>
+ <div class="grid" style="grid-template-columns:repeat(3,1fr)">
+  <div><label>Mode</label><select id="acmode"><option>cool</option><option>heat</option><option>dry</option><option>fan</option><option>auto</option></select></div>
+  <div><label>Temp °C</label><select id="actemp"></select></div>
+  <div><label>Fan</label><select id="acfan"><option>auto</option><option>low</option><option>med</option><option>high</option></select></div>
+ </div>
+ <div class="row" style="margin-top:10px"><button onclick="acSend(true)">Send (on)</button><button class="sec" onclick="acSend(false)">Off</button><span id="acmsg" style="color:var(--mute);font-size:13px"></span></div>
 </section>
 <section><h2>Received <span id="rxcount" style="text-transform:none;letter-spacing:0"></span></h2>
  <table><thead><tr><th>age</th><th>type</th><th>addr</th><th>cmd</th><th>raw</th><th></th></tr></thead><tbody id="rx"><tr><td colspan="6" style="color:var(--mute)">point a remote at the device…</td></tr></tbody></table>
@@ -119,9 +128,13 @@ async function status(){const s=await api('/api/status');cands=s.candidates;
  if(!$('ssid').value)$('ssid').value=s.ssid||'';
  if(!mqttTouched){$('mhost').value=s.mqtt.host||'';$('mport').value=s.mqtt.port||1883;$('muser').value=s.mqtt.user||''}
  $('mqttmsg').textContent='status: '+s.mqtt.state;
+ if(s.ac&&!acTouched){$('acmode').value=s.ac.mode;$('actemp').value=s.ac.temp;$('acfan').value=s.ac.fan;if(!$('acmsg').textContent)$('acmsg').textContent='last: '+(s.ac.power==='on'?s.ac.mode+' '+s.ac.temp+'°C fan '+s.ac.fan:'off')}
  $('st').innerHTML=Object.entries({firmware:s.firmware,uptime:s.uptime+' s',ip:s.ip,hostname:s.hostname+'.local',rssi:s.rssi+' dBm',carrier:s.carrier+' Hz',rx_idle:s.rx_idle,mqtt:s.mqtt.state+(s.mqtt.host?' ('+s.mqtt.host+':'+s.mqtt.port+')':''),mqtt_topic:s.mqtt.base}).map(([k,v])=>`<tr><th>${k}</th><td>${v}</td></tr>`).join('')}
 async function poll(){try{const r=await api('/api/received');if(r.seq===lastSeq)return;lastSeq=r.seq;$('rxcount').textContent=r.frames.length?`(${r.frames.length})`:'';
  const necs=r.frames.filter(f=>f.type==='nec');if(necs.length)lastNec=necs[necs.length-1];const now=r.now;$('rx').innerHTML=r.frames.length?r.frames.slice().reverse().map(f=>`<tr><td>${Math.round((now-f.t)/1000)}s</td><td>${f.type}</td><td>${f.type==='nec'?hex(f.addr,2):''}</td><td>${f.type==='nec'?hex(f.cmd,2):''}</td><td>${f.type==='nec'?'<code>'+hex(f.raw,8)+'</code>':f.pulses+' pulses (raw)'}</td><td>${f.type==='nec'?`<button class="sec" onclick="api('/api/send',{m:'POST',q:{raw:'${hex(f.raw,8)}'}})">send</button>`:(f===r.frames[r.frames.length-1]?`<button class="sec" onclick="saveNewest()">save…</button>`:'')}</td></tr>`).join(''):'<tr><td colspan="6" style="color:var(--mute)">nothing received yet</td></tr>'}catch(e){}}
+for(let t=16;t<=31;t++){const o=document.createElement('option');o.textContent=t;$('actemp').appendChild(o)}$('actemp').value='24';
+let acTouched=false;['acmode','actemp','acfan'].forEach(id=>$(id).addEventListener('change',()=>acTouched=true));
+async function acSend(on){try{const q=on?{power:'on',mode:$('acmode').value,temp:$('actemp').value,fan:$('acfan').value}:{power:'off'};const r=await api('/api/ac',{m:'POST',q});$('acmsg').textContent=r.message;acTouched=false}catch(e){$('acmsg').textContent='error: '+e.message}}
 async function sendNec(){try{const r=await api('/api/send',{m:'POST',q:{addr:$('addr').value,cmd:$('cmd').value}});$('txmsg').textContent=r.message}catch(e){$('txmsg').textContent='error: '+e.message}}
 async function sendRaw(){try{const r=await api('/api/send',{m:'POST',q:{raw:$('raw').value}});$('txmsg').textContent=r.message}catch(e){$('txmsg').textContent='error: '+e.message}}
 async function savePins(){const r=await api('/api/pins',{m:'POST',q:{led1:$('led1').value,led2:$('led2').value,led3:$('led3').value,rx:$('rx_pin').value,status:$('sled').value,status_invert:$('sinv').checked?1:0}});log(r.message);status()}
@@ -256,6 +269,7 @@ static void handleStatus() {
     j += "\"ip\":\"" + appIp() + "\",";
     j += "\"rssi\":" + String(appWifiConnected() ? WiFi.RSSI() : 0) + ",";
     j += "\"carrier\":" + String(cfg.carrierHz) + ",";
+    j += "\"ac\":" + acStateJson() + ",";
     j += "\"heap\":{\"free\":" + String(lt_heap_get_free()) + ",\"min_free\":" + String(lt_heap_get_min_free()) +
          ",\"max_alloc\":" + String(lt_heap_get_max_alloc()) + ",\"size\":" + String(lt_heap_get_size()) + "},";
     j += "\"mqtt\":{\"state\":" + jsonStr(mqttState()) + ",\"host\":" + jsonStr(cfg.mqttHost) + ",\"port\":" + String(cfg.mqttPort) +
@@ -577,6 +591,19 @@ static void handleMqtt() {
     ok(cfg.mqttHost.length() ? "mqtt settings saved, connecting" : "mqtt disabled");
 }
 
+// ---- air conditioner (native protocol)
+static void handleAc() {
+    if (server.method() == HTTP_GET) { server.send(200, "application/json", acStateJson()); return; }
+    AcState st = acState(); uint8_t key = AC_KEY_TEMP_UP; uint8_t v;
+    if (server.hasArg("power")) { String pw = server.arg("power"); st.power = (pw == "on" || pw == "1" || pw == "true"); key = AC_KEY_POWER; }
+    if (server.hasArg("mode")) { if (server.arg("mode") == "off") st.power = false; else if (acParseMode(server.arg("mode"), v)) { st.mode = v; key = AC_KEY_MODE; } else return fail(400, "mode: auto|cool|dry|fan|heat|off"); }
+    if (server.hasArg("temp")) { long n = server.arg("temp").toInt(); if (n < 16 || n > 31) return fail(400, "temp: 16..31"); st.temp = n; }
+    if (server.hasArg("fan")) { if (acParseFan(server.arg("fan"), v)) { st.fan = v; key = AC_KEY_FAN; } else return fail(400, "fan: auto|low|med|high"); }
+    String msg;
+    if (acApply(st, key, msg, server.arg("loopback") == "1")) server.send(200, "application/json", "{\"ok\":true,\"message\":" + jsonStr(msg) + ",\"state\":" + acStateJson() + "}");
+    else fail(400, msg);
+}
+
 static void handleReboot() {
     ok("rebooting");
     delay(200);
@@ -598,6 +625,8 @@ void webBegin() {
     server.on("/api/scan", HTTP_POST, handleScan);
     server.on("/api/wifi", HTTP_POST, handleWifi);
     server.on("/api/mqtt", HTTP_POST, handleMqtt);
+    server.on("/api/ac", HTTP_GET, handleAc);
+    server.on("/api/ac", HTTP_POST, handleAc);
     server.on("/api/reboot", HTTP_POST, handleReboot);
     server.on("/api/export", HTTP_GET, handleExport);
     server.on("/api/last", HTTP_GET, handleLast);

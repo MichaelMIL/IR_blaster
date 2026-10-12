@@ -4,6 +4,7 @@
 #include "config.h"
 #include "buttons.h"
 #include "recordings.h"
+#include "ac.h"
 
 static WiFiClient   net;
 static PubSubClient client(net);
@@ -53,6 +54,22 @@ void mqttPublishDiscovery() {
                "\"state_topic\":\"" + base + "/received\",\"value_template\":\"{{ value_json.code }}\","
                "\"json_attributes_topic\":\"" + base + "/received\",\"icon\":\"mdi:remote-tv\"" + avail + "," + deviceJson() + "}";
     pub(haPrefix + "/sensor/irb_" + devId + "/received/config", p, true);
+
+    // climate entity for the mapped AC remote
+    String st = base + "/ac/state";
+    p = "{\"name\":\"Air conditioner\",\"unique_id\":\"irb_" + devId + "_ac\","
+        "\"modes\":[\"off\",\"auto\",\"cool\",\"dry\",\"fan_only\",\"heat\"],"
+        "\"mode_command_topic\":\"" + base + "/ac/mode/set\",\"mode_state_topic\":\"" + st + "\",\"mode_state_template\":\"{{ value_json.hvac_mode }}\","
+        "\"temperature_command_topic\":\"" + base + "/ac/temp/set\",\"temperature_state_topic\":\"" + st + "\",\"temperature_state_template\":\"{{ value_json.temp }}\","
+        "\"fan_modes\":[\"auto\",\"low\",\"medium\",\"high\"],"
+        "\"fan_mode_command_topic\":\"" + base + "/ac/fan/set\",\"fan_mode_state_topic\":\"" + st + "\",\"fan_mode_state_template\":\"{{ value_json.fan_mode }}\","
+        "\"min_temp\":16,\"max_temp\":31,\"temp_step\":1,\"temperature_unit\":\"C\",\"precision\":1.0,\"icon\":\"mdi:air-conditioner\"" + avail + "," + deviceJson() + "}";
+    pub(haPrefix + "/climate/irb_" + devId + "/ac/config", p, true);
+    mqttPublishAcState();
+}
+
+void mqttPublishAcState() {
+    pub(base + "/ac/state", acStateJson(), true);
 }
 
 void mqttPublishReceived(const RxRecord &r) {
@@ -72,9 +89,34 @@ static void onMessage(char *topic, uint8_t *payload, unsigned int len) {
     String t(topic), p;
     for (unsigned i = 0; i < len; i++) p += (char)payload[i];
     p.trim();
-    String cmd = t.substring(base.length() + 5);          // after "<base>/cmd/"
     String msg; bool ok = false;
-    if (cmd == "button") {
+    if (t.startsWith(base + "/ac/")) {                     // climate entity commands
+        String what = t.substring(base.length() + 4);      // "mode/set" | "temp/set" | "fan/set"
+        AcState st = acState(); uint8_t key = AC_KEY_TEMP_UP; uint8_t v;
+        if (what == "mode/set") {
+            if (p == "off") { st.power = false; key = AC_KEY_POWER; ok = true; }
+            else if (acParseMode(p, v)) { st.mode = v; st.power = true; key = AC_KEY_MODE; ok = true; }
+        } else if (what == "temp/set") {
+            float f = p.toFloat(); if (f >= 16 && f <= 31) { st.temp = (uint8_t)(f + 0.5f); st.power = true; ok = true; }
+        } else if (what == "fan/set") {
+            if (acParseFan(p, v)) { st.fan = v; st.power = true; key = AC_KEY_FAN; ok = true; }
+        }
+        if (ok) ok = acApply(st, key, msg); else msg = "bad value for " + what;
+        Serial.printf("mqtt: ac %s '%s' -> %s\n", what.c_str(), p.c_str(), msg.c_str());
+        pub(base + "/result", String("{\"ok\":") + (ok ? "true" : "false") + ",\"message\":\"" + jsonEsc(msg) + "\"}", false);
+        return;
+    }
+    String cmd = t.substring(base.length() + 5);          // after "<base>/cmd/"
+    if (cmd == "ac") {                                     // JSON: {"power":"on","mode":"cool","temp":24,"fan":"high"} (all optional)
+        AcState st = acState(); uint8_t v; bool good = true;
+        auto field = [&](const char *k) -> String { int i = p.indexOf(String("\"") + k + "\""); if (i < 0) return ""; String r = p.substring(p.indexOf(':', i) + 1); r.replace("\"", " "); r.replace("}", " "); r.replace(",", " "); r.trim(); int sp = r.indexOf(' '); return sp > 0 ? r.substring(0, sp) : r; };
+        String fv;
+        if ((fv = field("power")).length()) st.power = (fv == "on" || fv == "true" || fv == "1");
+        if ((fv = field("mode")).length()) { if (fv == "off") st.power = false; else if (acParseMode(fv, v)) st.mode = v; else good = false; }
+        if ((fv = field("temp")).length()) { long n = fv.toInt(); if (n >= 16 && n <= 31) st.temp = n; else good = false; }
+        if ((fv = field("fan")).length()) { if (acParseFan(fv, v)) st.fan = v; else good = false; }
+        if (good) ok = acApply(st, AC_KEY_TEMP_UP, msg); else msg = "bad ac payload";
+    } else if (cmd == "button") {
         int idx = -1;
         if (p.length() && isDigit(p[0])) idx = p.toInt();
         else for (int i = 0; i < btnCount(); i++) if (p.equalsIgnoreCase(btnGet(i)->label)) { idx = i; break; }
@@ -138,6 +180,7 @@ void mqttLoop() {
         Serial.printf("mqtt: connected to %s:%u as %s, base topic %s\n", cfg.mqttHost.c_str(), cfg.mqttPort, cid.c_str(), base.c_str());
         client.publish(will.c_str(), "online", true);
         client.subscribe((base + "/cmd/#").c_str());
+        client.subscribe((base + "/ac/+/set").c_str());
         publishedButtons = BTN_MAX;            // clear any stale discovery entries once
         mqttPublishDiscovery();
     }

@@ -1,357 +1,285 @@
-# ir_blaster — custom firmware for a Tuya IR blaster (CB3S / BK7231N)
+# IR blaster — custom firmware for a Tuya CB3S IR remote
 
-PlatformIO project using the [LibreTiny](https://docs.libretiny.eu) platform
-(Arduino-style API on the Beken BK7231N inside the CB3S module).
+Open firmware for the cheap Tuya WiFi IR blasters built around the **CB3S**
+module (Beken BK7231N): one IR receiver, three IR LEDs, no cloud. Built with
+PlatformIO and [LibreTiny](https://docs.libretiny.eu).
 
-The starter firmware decodes NEC frames from the IR receiver and prints them
-on the serial console, and sends NEC frames from serial commands.
+What it does:
 
-## Build
+- **Learn and replay any remote** — raw capture of the whole key press, named
+  recordings stored in flash, replay through the LEDs with a hardware-PWM
+  38 kHz carrier.
+- **NEC remotes natively** — decode and send by address/command.
+- **Air conditioner natively** — the AC remote's protocol was reverse-engineered
+  (see [docs/AC_PROTOCOL.md](docs/AC_PROTOCOL.md)); set mode, temperature and
+  fan directly, no recordings needed.
+- **Web UI** — an admin page for everything, and a plain big-button remote
+  page (`/remote`) for everyday use.
+- **Home Assistant** — MQTT discovery publishes a climate entity for the AC,
+  a button entity per remote button and a "last IR code" sensor.
+- **OTA updates**, a JSON API, a serial console, and PC tools for streaming,
+  tagging and analysing captures.
 
-```sh
-pio run
-```
+## Contents
 
-## Wiring for serial flashing
+- [Hardware](#hardware)
+- [Build and flash](#build-and-flash)
+- [First setup](#first-setup)
+- [Web pages](#web-pages)
+- [Air conditioner](#air-conditioner)
+- [Recording any remote](#recording-any-remote)
+- [Home Assistant / MQTT](#home-assistant--mqtt)
+- [HTTP API](#http-api)
+- [Serial console](#serial-console)
+- [PC tools](#pc-tools)
+- [Troubleshooting and lessons learned](#troubleshooting-and-lessons-learned)
+- [Repository layout](#repository-layout)
 
-The CB3S has castellated pads. You need four wires to a 3.3 V USB-UART adapter
-(CP2102, CH340, FT232 ...). **Do not use 5 V.**
+## Hardware
 
-| CB3S pad | Adapter |
-|----------|---------|
-| 3V3      | 3.3 V   |
-| GND      | GND     |
-| TX1      | RX      |
-| RX1      | TX      |
+| Part | Notes |
+|------|-------|
+| Module | CB3S (BK7231N, 120 MHz, 256 KB RAM, 1 MB flash), castellated pads |
+| IR receiver | output on **P7** on this board (found with `rx scan`) |
+| IR LEDs | three LEDs driven by one transistor from **P26** |
+| Status LED | blue LED on **P8** (optional, configurable) |
+| Serial | UART1: **TX1 = P11, RX1 = P10**, 115200 baud; used for the console *and* for flashing |
 
-Notes:
-- The module's own 3.3 V regulator on the board may be fed from the USB port
-  of the blaster instead. Powering from the adapter's 3.3 V pin usually works,
-  but the BK7231N draws up to ~300 mA on WiFi; a weak adapter will brown out.
-  If flashing is flaky, power the blaster from its own USB cable and connect
-  only GND, TX1 and RX1.
-- TX1/RX1 are the download UART. TX2/RX2 is the log UART and will not flash.
-- Some boards tie the Tuya MCU reset to the IR receiver power rail; nothing to
-  do, just be aware the receiver stops while flashing.
+Pins are configured at runtime and stored in flash, so other boards of the
+same family only need `rx scan` / `led scan` to find theirs. PWM-capable
+GPIOs (needed for the LED carrier): P6 P7 P8 P9 P24 P26.
 
-## Flash
-
-1. Plug in the adapter and find the port (the name changes with the USB socket):
-   ```sh
-   ls /dev/cu.usbserial*
-   ```
-2. Flash at 115200 baud. The default 921600 died mid-write on this wiring.
-   ```sh
-   ~/.platformio/penv/bin/ltchiptool flash write -d /dev/cu.usbserial-XXXX -b 115200 -t 150 .pio/build/cb3s/firmware.uf2
-   ```
-   or, via PlatformIO (uses `upload_speed` / `upload_port` from `platformio.ini`):
-   ```sh
-   pio run -t upload --upload-port /dev/cu.usbserial-XXXX
-   ```
-3. The first time (stock Tuya firmware) the chip must be reset while the
-   flasher polls: short CEN to GND for half a second, or drop the module's 3V3.
-   Once this firmware is on the chip, `Serial` lives on UART1 and LibreTiny's
-   auto-download-reboot kicks the chip into the bootloader by itself.
-4. Open the monitor:
-   ```sh
-   pio device monitor -b 115200
-   ```
-
-Lessons from the first flash:
-- Power the blaster from its own USB cable, not from the adapter's 3.3 V pin.
-  The module's boot inrush reset the USB-serial chip and the port vanished.
-- Keep the USB adapter plugged in; reset only the module.
-- `Serial` on BK72xx defaults to UART2 (TX2/RX2). `-D LT_UART_DEFAULT_PORT=1`
-  in `platformio.ini` moves it to UART1 so the flash pads double as console.
-
-## Pin mapping
-
-Pins are assigned at runtime from the serial console and stored in flash
-(first 4 KiB of the `userdata` partition). Defaults come from `platformio.ini`
-(`IR_TX_PIN` = LED 1, `IR_RX_PIN` = receiver). `reset` restores them.
-
-Candidate GPIOs on the CB3S: P6 P7 P8 P9 P14 P20 P21 P22 P23 P24 P26.
-P10/P11 are the serial console and are refused.
-
-Known so far on this board: **P8 drives the blue status LED** (configurable
-with `sled pin P8`; the firmware blinks it 3x at boot, 1 Hz while connecting
-to WiFi, steady when connected, and flashes it on IR send/receive). The **IR
-receiver is on P7** (found with `rx scan`). LED 1 on P26 replays
-successfully.
-
-### Finding the pins (test mode)
-
-```
-rx scan 10          # press remote buttons at the device; reports which GPIO toggles
-rx pin P7           # assign it
-rx test 15          # live readings: edges/s, decoded NEC frames, idle level
-led scan 2          # each candidate GPIO blinks for 2 s - watch LEDs through a phone camera
-led 1 pin P26       # assign the LED that blinked (repeat for led 2 / led 3)
-led 1 test 3        # blink only LED 1 for 3 s
-led all test        # blink all configured LEDs
-```
-
-A working receiver idles HIGH. `rx test` printing `idle level: LOW` and
-`0 edges/s` means that GPIO is not the receiver output. If the three LEDs are
-driven by one transistor, only one GPIO will blink them all; leave the other two
-as `none`.
-
-## Recording any remote (air conditioners etc.)
-
-AC remotes do not use NEC; they send long multi-part frames. The receiver
-captures the whole key press as raw mark/space timings (up to 800 pulses,
-parts closer than 80 ms are kept together) and recordings are stored by name
-in flash (32 slots, 4 KiB each, in the `userdata` partition).
-
-```
-rec ac_cool_24          # waits up to 15 s for the next key press, then stores it
-save ac_cool_24         # alternative: store the last frame that was received
-list                    # names, pulse counts, lengths
-play ac_cool_24         # retransmit through all configured LEDs
-dump ac_cool_24         # print the raw timings (µs, mark first) for export
-del ac_cool_24
-```
-
-The web page has the same under **Recordings**, and `POST /api/play?name=…`
-is what a Home Assistant REST command would call.
-
-Several keys in a row: `rec ac_off ac_cool_22 ac_cool_23` waits for one key
-press per name (serial), or use **Record a sequence** on the web page.
-
-Live stream: **Live capture → Start stream** on the web page lists every frame
-the receiver sees, with its raw timings, a copy button and a "save…" button
-per entry, so you can press keys freely and name the good captures afterwards.
-On serial, `stream on` prints one line per frame with the timings as JSON.
-API: `GET /api/stream?after=<id>` (last 8 captures), `POST /api/stream/save?id=&name=`.
-`POST /api/send?addr=&cmd=&loopback=1` sends with the receiver kept on, which
-shows up in the stream and makes a quick self-test.
-
-Tip: AC remotes transmit their *entire state* (mode, temperature, fan, swing)
-on every key press, so record one entry per state you want, e.g.
-`ac_off`, `ac_cool_24`, `ac_cool_22`, `ac_heat_26`.
-
-## WiFi
-
-```
-wifi ssid My Network      # spaces allowed
-wifi pass hunter2
-wifi connect              # also auto-connects at every boot once saved
-wifi status               # ip, rssi
-wifi clear
-```
-
-Hostname is `ir-blaster`. Nothing listens on the network yet; the next step is
-an HTTP or MQTT endpoint for `send`.
-
-## Serial commands
-
-```
-status                     firmware / wifi / pin summary
-send <addr> <cmd>          NEC with inverse bytes on all configured LEDs, e.g. send 0x04 0x08
-raw <hex32>                full 32-bit NEC word as printed by the receiver
-rec <name> [sec]           save <name>   play <name>   list   del <name>   dump <name>
-sled pin <P#|none>         sled invert on|off     sled test        (blue status LED)
-led <1-3> pin <P#|none>    led <1-3> test [sec]   led all test [sec]   led scan [sec]
-rx pin <P#|none>           rx test [sec]          rx scan [sec]
-reset                      reboot                 help
-```
-
-Every received frame is printed as it arrives:
-
-```
-RX NEC addr=0x04 cmd=0x08 raw=0xF708FB04
-RX raw 36 pulses (not NEC)         <- another protocol; still proves the pin
-```
-
-## Home Assistant (MQTT)
-
-Set the broker on the admin page under **Home Assistant (MQTT)** (host, port,
-optional user/password) or on serial: `mqtt host 192.168.1.10 1883`,
-`mqtt user …`, `mqtt pass …`, `mqtt` for status. With MQTT discovery enabled in
-Home Assistant (the default) the device appears automatically as
-"IR Blaster" with:
-
-- one **button** entity per remote button (same list as `/remote`), kept in
-  sync when buttons are added, renamed, reordered or deleted
-- a **Last IR code** sensor (`NEC BA/1E`, `raw 197 pulses`, …) with the full
-  frame as attributes, updated on every received frame
-- availability from the `status` topic (LWT), so entities grey out when the
-  device is off
-
-Topics (`<base>` = `ir_blaster/<last 3 MAC bytes>`, shown on the Status panel):
-
-```
-<base>/status        online | offline (retained)
-<base>/received      {"code":"NEC BA/1E","type":"nec","addr":186,"cmd":30,"raw":"0xE11E45BA","pulses":67}
-<base>/result        {"ok":true,"message":"…"} after every command
-<base>/cmd/button    payload: button index or label           e.g. "AC on"
-<base>/cmd/send      payload: "0xBA 0x1E" or {"addr":"0xBA","cmd":30}
-<base>/cmd/raw       payload: 32-bit NEC word                  e.g. 0xE11E45BA
-<base>/cmd/play      payload: recording name                   e.g. AC_ON
-```
-
-## Stream recorder (PC side)
-
-`tools/ir_stream.py` follows the live capture stream and writes every frame to
-a file:
+## Build and flash
 
 ```sh
-python3 tools/ir_stream.py --host ir-blaster.local            # -> ir_stream_<date>.jsonl
-python3 tools/ir_stream.py --host 192.168.50.209 --prompt     # ask for a name after each capture and save it on the device
-python3 tools/ir_stream.py --json --out session.json          # one JSON document (same shape as /api/export)
-python3 tools/ir_analyze.py ir_stream_….jsonl                 # the analyzer reads both formats
+pio run                       # build  -> .pio/build/cb3s/firmware.uf2
 ```
 
-On macOS use the system `python3` (`/usr/bin/python3`): other Python builds
-(Homebrew, conda, PlatformIO's) are blocked from the local network until you
-allow them under System Settings → Privacy & Security → Local Network, and
-fail with "No route to host".
+### First flash: serial
 
-## Key mapper GUI (PC side)
-
-`tools/ir_mapper.py` is a local web app for mapping a remote key by key:
+Wire a **3.3 V** USB-UART adapter (never 5 V): adapter RX → TX1, adapter
+TX → RX1, GND → GND. Power the blaster from its own USB cable, not from the
+adapter's 3.3 V pin (the boot inrush resets the adapter and the port
+disappears). Then:
 
 ```sh
-/usr/bin/python3 tools/ir_mapper.py --host ir-blaster.local --session ac_map.json
+ls /dev/cu.usbserial*                                   # the name changes with the USB socket
+~/.platformio/penv/bin/ltchiptool flash write -d /dev/cu.usbserial-XXXX -b 115200 -t 150 .pio/build/cb3s/firmware.uf2
 ```
 
-It opens `http://127.0.0.1:8765/`, follows the device's capture stream and
-lists every frame as it arrives in a **state table**: one dropdown per column
-(Power, Mode, Temp 16-30, Fan, Swing, Extra). The tag is generated from the
-row, e.g. `cool_22_auto_off`, `heat_24_high_off_sleep`, `off`.
+With the stock Tuya firmware the chip must be reset *while the tool polls*:
+short **CEN** to GND for half a second or drop the module's 3V3. 921600 baud
+dropped the link mid-write on this wiring; 115200 is reliable. Once this
+firmware runs, the console lives on UART1 and the flasher reboots the chip by
+itself.
 
-- A new capture **copies the previous row's settings**; if that leaves it
-  identical to the previous row the **temperature steps up by one**. So
-  pressing "temp up" repeatedly tags `cool_22`, `cool_23`, `cool_24` … with
-  no typing; change a dropdown (mode, fan, …) on a row and the following
-  captures continue from there. The "Next capture" panel shows what the next
-  row will get.
-- Captures stay on the PC. "to device" / "Upload all tagged" store them on the
-  blaster as recordings (then they appear on `/remote` and in Home Assistant);
-  the optional **auto-upload** checkbox does that for every tagged capture.
-- **play** replays a capture through the device; **Compare two captures**
-  highlights the bits that differ, which is how you find the temperature /
-  mode / checksum fields.
-- Everything is saved to the session file on every change; "Export for
-  ir_analyze.py" writes `<session>_export.json`.
-
-Columns and options live in `COLUMNS` at the top of the script; edit them
-for a remote with other features.
-
-Device endpoint used for uploads: `POST /api/recordings/put?name=…` with the
-timings as a comma-separated body.
-
-## RAM budget
-
-The BK7231N leaves this firmware only ~72 KB of heap after the WiFi stack.
-Static buffers (stream ring, capture buffers, flash slots) are sized to keep
-~30 KB free; below ~20 KB, OTA uploads and large HTTP responses fail with
-dropped connections. `GET /api/status` reports `heap.free` / `heap.min_free`;
-MQTT is suspended and its buffer released for the duration of an OTA upload.
-
-## OTA updates
-
-Once the device is on WiFi you never need the serial adapter again:
+### Every later update: OTA
 
 ```sh
 pio run -e cb3s_ota -t upload --upload-port ir-blaster.local   # or the IP
 ```
 
-That builds and POSTs `firmware.uf2` to `/update`; the device verifies it,
-reboots and keeps its config and recordings (they live in `userdata`, outside
-the app partitions). The web page has the same under **Firmware update**, and
-plain curl works too:
+Builds and POSTs the UF2 to `/update`; the device verifies it, reboots in
+~8 s, and keeps its settings and recordings. The web page has the same under
+**Firmware update**. MQTT is suspended during an upload (see RAM notes).
 
-```sh
-curl -F "file=@.pio/build/cb3s/firmware.uf2" http://ir-blaster.local/update
-```
+## First setup
 
-If an OTA ever bricks the app, the serial method in **Flash** still works.
-
-## Exporting captures for analysis
-
-```sh
-curl -o ir_export.json http://ir-blaster.local/api/export   # or the Download button on the web page
-python3 tools/ir_analyze.py ir_export.json                   # all recordings
-python3 tools/ir_analyze.py ir_export.json ac_on             # one of them
-```
-
-The export holds the last capture and every recording as raw microsecond
-timings (`mark,space,mark,...`). `tools/ir_analyze.py` splits multi-part
-frames, detects the header, works out whether bits are mark-length or
-space-length encoded, prints the bytes LSB- and MSB-first, and guesses the
-protocol family from a table. Record a few states (`ac_cool_22`,
-`ac_cool_23`, `ac_off`) and diff the byte rows to find temperature, mode and
-checksum fields. `GET /api/last` returns just the most recent capture; the
-serial `export` command prints the same JSON.
-
-## Transmit path and loopback test
-
-The 38 kHz carrier is generated by the chip's hardware PWM (38.46 kHz) on any
-PWM-capable LED pin (P6 P7 P8 P9 P24 P26). The software bit-bang fallback
-measured only 31-33 kHz on this chip and lost half the pulses through a
-38 kHz receiver, so it is used only for non-PWM pins. The start/stop cost of
-the PWM driver (~170 µs per pulse) is measured at boot and subtracted.
+Open a serial monitor (`pio device monitor -b 115200`) and type `help`.
 
 ```
-txtest ac_on        # plays a recording with the receiver kept on and compares what came back
-txcal               # carrier / overhead figures
-txmode bitbang      # A/B against the software carrier (not saved)
+wifi ssid My Network          # spaces allowed
+wifi pass hunter2
+wifi connect                  # auto-connects at every boot from now on
+rx scan 10                    # press any remote at the device -> reports the receiver GPIO
+rx pin P7
+led scan 2                    # each candidate GPIO blinks; watch the LEDs through a phone camera
+led 1 pin P26
+status
 ```
 
-`txtest` needs some LED light reflected into the receiver (hold a hand or a
-sheet of paper ~10 cm in front of the device). A healthy result returns all
-pulses but the trailing space, with a mean error below ~100 µs.
+The console prints the URL once WiFi is up; from then on everything can be
+done from the browser, including the above under **Pins** and **WiFi**.
 
-Receiver dropouts (a mark or space shorter than 250 µs) are merged when a
-recording is saved and again when it is played, so older recordings are fine.
+## Web pages
 
-## Remote page for everyday use
+- **`/`** — admin: send NEC, air conditioner, received-frame log, live capture
+  stream, recordings, remote buttons, pins and test helpers, WiFi, MQTT, OTA,
+  export, status (heap, reboot reason, …).
+- **`/remote`** — a grid of large buttons for phones. Buttons are defined on
+  the admin page: a label plus a NEC code or a recording, optionally repeated.
 
-`http://ir-blaster.local/remote` is a plain grid of big buttons, phone-friendly,
-with no settings on it. Buttons are defined on the admin page (`/`) under
-**Remote buttons**: a label plus either a NEC address/command or a recording
-name, optionally repeated 2-3 times. "Fill from last received NEC" copies the
-code of the last frame the receiver saw. Up to 24 buttons, stored in flash.
+Hostname `ir-blaster.local` (mDNS) or the IP from the console / router.
 
-API: `GET /api/buttons`, `POST /api/button?id=N` (press),
-`POST /api/buttons/set?label=&type=nec&addr=&cmd=&repeat=` or
-`type=rec&rec=<name>`, `POST /api/buttons/move?id=&dir=-1|1`,
-`POST /api/buttons/delete?id=`.
+## Air conditioner
 
-## Web page
-
-Once on WiFi: `http://ir-blaster.local/` (or the IP printed on the console).
-Panels: Send, Received (live, with one-click replay), Recordings, Pins (with
-"Find LEDs" / "Find receiver" helpers and status-LED settings), WiFi, Status.
-
-JSON API behind it (all `POST` take query-string arguments):
+The AC remote's 12-byte protocol is fully decoded; the firmware builds frames
+itself. Details, byte map and the reverse-engineering story are in
+[docs/AC_PROTOCOL.md](docs/AC_PROTOCOL.md).
 
 ```
-GET  /api/status            GET  /api/received          GET  /api/recordings
-GET  /api/export            GET  /api/last              POST /update  (multipart "file" = .uf2)
-POST /api/send?addr=&cmd=   POST /api/send?raw=0x…      POST /api/play?name=
-POST /api/record?name=&sec= POST /api/record/last?name= POST /api/recordings/delete?name=
+serial:  ac cool 24 high     ac heat 22     ac 26     ac low     ac off
+http:    POST /api/ac?power=on&mode=cool&temp=24&fan=high      GET /api/ac
+mqtt:    <base>/cmd/ac  {"power":"on","mode":"cool","temp":24,"fan":"high"}
+         or the climate topics <base>/ac/mode/set, /ac/temp/set, /ac/fan/set
+HA:      "Air conditioner" climate entity via MQTT discovery
+python:  tools/ac_encode.py --mode heat --temp 22 --send
+```
+
+Modes auto/cool/dry/fan/heat, 16-31 °C, fan auto/low/med/high. Swing and
+other extras are not mapped yet; record one press of each with the mapper
+and `tools/ac_encode.py --verify` points at the byte.
+
+## Recording any remote
+
+Every received frame is captured as raw mark/space timings (up to 800
+pulses; multi-part frames with gaps under 80 ms stay together). Recordings
+are stored by name in flash (32 slots) and survive reboots.
+
+```
+rec ac_old_remote_on          # waits up to 15 s for the next key press and stores it
+rec a b c                     # one key press per name
+save <name>                   # store the last received frame instead
+play <name>                   # retransmit through all LEDs
+list / dump <name> / del <name>
+stream on                     # print every received frame with raw timings (live)
+```
+
+Web: **Live capture → Start stream** lists frames as they arrive with a
+"save…" button each; **Recordings** has play/delete; **Record a sequence**
+takes a comma-separated list of names. Receiver dropouts (pulses under
+250 µs) are merged on save and on play.
+
+NEC remotes decode directly: frames print as `RX NEC addr=0xBA cmd=0x1E`
+and can be resent with `send 0xBA 0x1E` or `raw 0xE11E45BA`.
+
+## Home Assistant / MQTT
+
+Set the broker under **Home Assistant (MQTT)** on the admin page or with
+`mqtt host <host> [port]`, `mqtt user …`, `mqtt pass …`. With MQTT discovery
+enabled in HA (the default) the device appears as "IR Blaster" with:
+
+- a **climate** entity for the AC (modes off/auto/cool/dry/fan_only/heat,
+  16-31 °C, fan auto/low/medium/high); its state is what the blaster last
+  sent and is kept across reboots
+- one **button** entity per remote button, kept in sync with the button list
+- a **Last IR code** sensor with the full frame as attributes
+- availability from the last-will `status` topic
+
+Topics (`<base>` = `ir_blaster/<last 3 MAC bytes>`, shown on the Status panel):
+
+```
+<base>/status        online | offline (retained)
+<base>/ac/state      {"power":"on","mode":"cool","temp":24,"fan":"high","hvac_mode":"cool","fan_mode":"high"} (retained)
+<base>/received      {"code":"NEC BA/1E","type":"nec","addr":186,"cmd":30,"raw":"0xE11E45BA","pulses":67}
+<base>/result        {"ok":true,"message":"…"} after every command
+<base>/ac/mode/set   off | auto | cool | dry | fan_only | heat      (HA climate)
+<base>/ac/temp/set   16..31
+<base>/ac/fan/set    auto | low | medium | high
+<base>/cmd/ac        {"power":"on","mode":"cool","temp":24,"fan":"high"}   (any subset)
+<base>/cmd/button    button index or label
+<base>/cmd/send      "0xBA 0x1E" or {"addr":"0xBA","cmd":30}
+<base>/cmd/raw       32-bit NEC word
+<base>/cmd/play      recording name
+```
+
+## HTTP API
+
+All `POST`s take query-string arguments.
+
+```
+GET  /api/status                       firmware, wifi, pins, heap, reboot reason, mqtt, ac state
+GET  /api/ac   POST /api/ac?power=&mode=&temp=&fan=[&loopback=1]
+POST /api/send?addr=&cmd=  |  ?raw=0x…  [&loopback=1]     loopback keeps the receiver on (self-test)
+GET  /api/received         POST /api/received/clear
+GET  /api/stream?after=<id>            last captures with full timings
+POST /api/stream/save?id=&name=        POST /api/stream/clear
+GET  /api/recordings   POST /api/play?name=   POST /api/record?name=&sec=   POST /api/record/last?name=
+POST /api/recordings/put?name=   (body: comma-separated timings)   POST /api/recordings/delete?name=
+GET  /api/export       GET /api/last          JSON of all recordings / last capture
+GET  /api/buttons      POST /api/button?id=   POST /api/buttons/set?label=&type=nec|rec&addr=&cmd=&rec=&repeat=
+POST /api/buttons/move?id=&dir=-1|1    POST /api/buttons/delete?id=
 POST /api/pins?led1=&led2=&led3=&rx=&status=&status_invert=
-POST /api/test?led=1|2|3|all&sec=   POST /api/blink?pin=&sec=   POST /api/scan?sec=
-POST /api/wifi?ssid=&pass=  POST /api/reboot
+POST /api/test?led=1|2|3|all&sec=      POST /api/blink?pin=&sec=      POST /api/scan?sec=
+POST /api/wifi?ssid=&pass=   POST /api/mqtt?host=&port=&user=&pass=   POST /api/reboot
+POST /update                           multipart "file" = firmware.uf2 (OTA)
 ```
 
-## Next steps
+## Serial console
 
-- Expose recordings as HA buttons directly (today: add them as remote buttons)
-- Add more protocols (Samsung, Sony SIRC, RC5, raw timing capture/replay)
-- OTA updates via `ArduinoOTA` or the LibreTiny OTA helper
+115200 baud on UART1. `help` lists everything; the main groups:
 
-## Toolchain notes (this machine)
+```
+status | reboot | reset                         wifi ssid|pass|connect|status|clear
+ac …                                            mqtt host|user|pass|clear
+send <addr> <cmd> | raw <hex32>                 rec | save | play | list | del | dump | export | stream
+led <1-3> pin|test, led all test, led scan      rx pin|test|scan
+sled pin|invert|test (status LED)               carrier <hz>
+txtest <name> | txtest nec <addr> <cmd>         txcal | txmode pwm|bitbang | txcomp <mark> <space>
+```
 
-- LibreTiny 1.13.0 fails on PlatformIO Core 6.2.0 with
-  `TypeError: Library.__post_init__() missing 1 required positional argument: 'env'`.
-  The VS Code extension forces core 6.2.0 (it re-upgrades on every restart), so
-  `~/.platformio/platforms/libretiny/builder/utils/libs-queue.py` is patched locally:
-  `Library.env` is a plain dataclass field instead of an `InitVar`. The original is
-  kept next to it as `libs-queue.py.orig`. Re-apply if the platform is reinstalled.
-- The PlatformIO package mirror (`sin1.contabostorage.com`) is DNS-blocked by the
-  ASUS router on the home network, so core package downloads hang and retry
-  endlessly. Allow that host in the router, or expect "stuck" installs.
-- Flashing helper (`ltchiptool`) lives in `~/.platformio/penv/bin/ltchiptool`.
+`txtest` is a loopback: it plays a frame with the receiver kept on and
+compares what came back (the receiver sees the LEDs directly on this board).
+
+## PC tools
+
+All in `tools/`, standard library only. On macOS run them with
+**`/usr/bin/python3`**: other Python builds are blocked from the local network
+by the "Local Network" privacy setting and fail with "No route to host".
+
+| Tool | Purpose |
+|------|---------|
+| `ir_mapper.py` | **Key mapper GUI** (local web app). Shows captures live in a state table with dropdowns (power, mode, temp, fan, swing, extra); a new capture copies the previous row and steps the temperature up; tags are generated from the state; compare two captures bit by bit; upload captures to the device; export. `--session file.json`, `--host`. |
+| `ac_encode.py` | Build / send AC frames from a state; `--verify session.json` regenerates every tagged capture and compares bit-exactly; `parse_bytes` decodes a frame into a state and reports unexplained bytes. |
+| `ir_analyze.py` | Generic analysis of raw captures: glitch merging, section split, header detection, mark- vs space-coded bits, bytes LSB/MSB-first, protocol-family guess. Reads `/api/export` JSON and `ir_stream.py` JSONL. |
+| `ir_stream.py` | Follow the device's capture stream and append every frame to a JSONL file; `--prompt` names and saves each on the device. |
+
+## Troubleshooting and lessons learned
+
+- **Replay reads fine but the AC ignores it** → the software bit-bang
+  carrier measured only 31-33 kHz on this chip; the firmware now uses
+  hardware PWM (38.46 kHz). `txcal` shows the figures.
+- **Frames come out corrupted at random** → the WiFi task preempted the
+  transmission; transmission now runs at top task priority. Suspending the
+  scheduler instead crashed the device.
+- **Captures of the remote are garbage** (hundreds of 1.6 ms marks) →
+  receiver saturation; hold the remote 30-50 cm away.
+- **OTA upload drops ("Broken pipe")** → heap exhaustion. The BK7231N leaves
+  ~72 KB of heap; below ~20 KB free, uploads and large responses fail. Static
+  buffers are sized to keep ~30 KB free, MQTT is suspended (and its buffer
+  released) during an upload, and a broken upload is aborted so it cannot
+  leak. `GET /api/status` shows `heap.free` / `heap.min_free`.
+- **Admin page blank** → pages over ~16 KB cannot be handed to the stack in
+  one write; they are sent in 1 KB chunks.
+- **Device "unreachable" from a Python script but fine with curl** → macOS
+  Local Network privacy; use `/usr/bin/python3` or allow the interpreter.
+- **The build fails inside VS Code** with `Library.__post_init__() missing
+  'env'` → LibreTiny 1.13.0 vs PlatformIO Core 6.2.0; the platform's
+  `builder/utils/libs-queue.py` is patched locally (`Library.env` as a plain
+  field). Re-apply after a platform reinstall. PlatformIO's package mirror is
+  blocked by some routers, which looks like a hung build.
+- **Receiver chatter** → single-edge glitches are dropped (frames under
+  6 pulses); the stream and received list only show real frames.
+- `GET /api/status` → `reboot_reason` says whether the last restart was a
+  software reboot, watchdog, crash or power-up.
+
+## Repository layout
+
+```
+platformio.ini          cb3s (serial) and cb3s_ota (OTA) environments, pin defaults
+src/main.cpp            setup/loop, serial console, capture ring, test helpers
+src/ir_nec.cpp          IR receiver (interrupt driven), sender (PWM carrier), NEC codec
+src/ac.cpp              native AC protocol encoder/decoder
+src/web_ui.cpp          HTTP API, admin page, remote page, OTA
+src/mqtt.cpp            MQTT client, Home Assistant discovery
+src/recordings.cpp      named raw recordings in flash
+src/buttons.cpp         remote-page buttons in flash
+src/config.cpp          settings in flash (with migration between versions)
+lib/PubSubClient        vendored MQTT library
+tools/                  ir_mapper.py, ac_encode.py, ir_analyze.py, ir_stream.py
+docs/AC_PROTOCOL.md     the AC protocol
+ac_map.json             the tagged AC captures the protocol was derived from
+```
+
+Flash layout: app partitions for OTA, plus the `userdata` partition holding
+the config block, 32 recording slots (4 KB each) and the button table.

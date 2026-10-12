@@ -11,6 +11,7 @@
 #include "recordings.h"
 #include "buttons.h"
 #include "mqtt.h"
+#include "ac.h"
 
 #ifndef IR_CARRIER_HZ
 #define IR_CARRIER_HZ 38000
@@ -155,6 +156,7 @@ bool appSendNec(uint8_t a, uint8_t c, bool keepRx) {
     return true;
 }
 bool appSendRaw(uint32_t w) { if (!tx.pinCount()) return false; rx.end(); tx.sendNecRaw(w); applyRxPin(); appStatusBlink(120); return true; }
+bool appSendTimings(const uint32_t *t, int n, bool keepRx) { if (!tx.pinCount() || n <= 0) return false; if (!keepRx) rx.end(); tx.sendTimings(t, n); if (!keepRx) applyRxPin(); appStatusBlink(150); return true; }
 bool appWifiConnected() { return WiFi.status() == WL_CONNECTED; }
 
 static void applyTxPins() {
@@ -176,7 +178,11 @@ static void printFrame(const IrFrame &f) {
                       f.address, f.command, (unsigned long)f.raw,
                       f.extended ? " (extended)" : "");
     } else {
-        Serial.printf("RX raw %d pulses (not NEC) - 'save <name>' keeps it\n", f.pulses);
+        AcState st; uint8_t key;
+        if (f.pulses >= 195 && acDecodeTimings(lastCapture, lastN, st, key))
+            Serial.printf("RX AC frame: %s %s %dC fan %s (key 0x%02X)\n", st.power ? "on" : "off", acModeName(st.mode), st.temp, acFanName(st.fan), key);
+        else
+            Serial.printf("RX raw %d pulses (not NEC) - 'save <name>' keeps it\n", f.pulses);
     }
 }
 
@@ -236,6 +242,7 @@ static void printHelp() {
         "  mqtt host <host> [port] | mqtt user <u> | mqtt pass <p> | mqtt clear | mqtt   (Home Assistant)\n"
         "  send <addr> <cmd>            send NEC via all configured LEDs\n"
         "  raw <hex32>                  send raw 32-bit NEC word\n"
+        "  ac cool 24 high | ac off     native air-conditioner command (see docs/AC_PROTOCOL.md)\n"
         "recordings (any remote, e.g. AC):\n"
         "  rec <name> [name2 ...] [sec] wait for one key press per name and store each\n"
         "  stream on|off                print every received frame with raw timings (live)\n"
@@ -719,6 +726,21 @@ static void handleCommand(const String &cmd) {
         Serial.printf("mqtt: %s  host=%s port=%u user=%s base=%s\n", mqttState().c_str(), cfg.mqttHost.c_str(), cfg.mqttPort, cfg.mqttUser.c_str(), mqttBaseTopic().c_str());
         Serial.println("usage: mqtt host <host> [port] | mqtt user <u> | mqtt pass <p> | mqtt clear | mqtt");
         return;
+    }
+
+    if (c == "ac") {
+        AcState st = acState(); uint8_t key = AC_KEY_TEMP_UP; bool any = false;
+        for (int i = 1; i < n; i++) {
+            String a = t[i]; a.toLowerCase(); uint8_t v; long num = a.toInt();
+            if (a == "on") { st.power = true; key = AC_KEY_POWER; any = true; }
+            else if (a == "off") { st.power = false; key = AC_KEY_POWER; any = true; }
+            else if (acParseMode(a, v)) { st.mode = v; st.power = true; key = AC_KEY_MODE; any = true; }
+            else if (acParseFan(a, v)) { st.fan = v; st.power = true; key = AC_KEY_FAN; any = true; }
+            else if (num >= 16 && num <= 31) { st.temp = num; st.power = true; any = true; }
+            else { Serial.printf("ac: don't understand '%s'\n", t[i].c_str()); return; }
+        }
+        if (!any) { Serial.printf("ac state: %s\nusage: ac off | ac on | ac [auto|cool|dry|fan|heat] [16-31] [auto|low|med|high]  (any order, e.g. ac cool 24 high)\n", acStateJson().c_str()); return; }
+        String msg; acApply(st, key, msg); Serial.println(msg); return;
     }
 
     if (c == "send") {

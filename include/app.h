@@ -26,6 +26,7 @@ void     appClearReceived();
 
 bool appSendNec(uint8_t addr, uint8_t cmd, bool keepRx = false);   // keepRx: receiver stays on (self-test)
 bool appSendRaw(uint32_t word);
+bool appSendTimings(const uint32_t *t, int n, bool keepRx = false);   // raw mark/space list through all LEDs
 int  appTxPinCount();
 
 void appLedTest(int idx, uint32_t seconds);        // idx -1 = all configured
