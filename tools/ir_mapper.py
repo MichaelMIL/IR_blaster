@@ -234,21 +234,26 @@ code,.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-let caps=[],cols=[],selected=null,lastSeen=0;
+let caps=[],cols=[],selected=null,lastSeen=0,lastSig='',dirty=false;
+function editing(){const a=document.activeElement;return !!(a&&(a.tagName==='SELECT'||a.tagName==='INPUT')&&a.closest('#rows'))}
+function deferredRender(){if(dirty&&!editing()){dirty=false;render()}}
 function esc(s){return String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 async function api(p,{m='GET',q={},body}={}){const u=new URL(p,location.href);for(const k in q)u.searchParams.set(k,q[k]);const r=await fetch(u,{method:m,body:body?JSON.stringify(body):undefined,headers:body?{'Content-Type':'application/json'}:{}});const t=await r.text();try{return JSON.parse(t)}catch{return t}}
 function msg(m){$('msg').textContent=m}
-async function setState(id,key,val){const c=caps.find(c=>c.id===id);if(!c)return;const st=Object.assign({},c.state||{});st[key]=val;await api('/api/capture',{m:'POST',q:{id},body:{state:st}});await load();if($('autoup').checked)upload(id,true)}
-function sel(c,col){return `<select onclick="event.stopPropagation()" onchange="setState(${c.id},'${col.key}',this.value)">${col.options.map(o=>`<option ${((c.state||{})[col.key]===o)?'selected':''}>${o}</option>`).join('')}</select>`}
+async function setState(id,key,val){const c=caps.find(c=>c.id===id);if(!c)return;const st=Object.assign({},c.state||{});st[key]=val;await api('/api/capture',{m:'POST',q:{id},body:{state:st}});if(document.activeElement)document.activeElement.blur();await load();if($('autoup').checked)upload(id,true)}
+function sel(c,col){return `<select onclick="event.stopPropagation()" onblur="setTimeout(deferredRender,50)" onchange="setState(${c.id},'${col.key}',this.value)">${col.options.map(o=>`<option ${((c.state||{})[col.key]===o)?'selected':''}>${o}</option>`).join('')}</select>`}
 async function load(){const r=await api('/api/state');caps=r.captures;cols=r.columns;$('sess').textContent='· '+r.session;$('dev').innerHTML=`<span class="dot ${r.status.device==='connected'?'on':''}"></span>${r.host}: ${r.status.device}${r.status.device!=='connected'&&r.status.last_error?' ('+esc(r.status.last_error)+')':''}`;
  $('next').innerHTML=cols.map(c=>`<span style="color:var(--mute)">${c.label.toLowerCase()}</span> <b>${esc(r.next.state[c.key])}</b>`).join(' &nbsp; ')+`<br>tag: <span class="tag">${esc(r.next.tag)}</span>`;
  for(const c of caps){if(c.id>lastSeen){lastSeen=c.id;if($('autoup').checked&&c.tag&&!c.uploaded)upload(c.id,true)}}
+ const sig=JSON.stringify(caps.map(c=>[c.id,c.tag,c.state,c.uploaded]))+'|'+selected;
+ if(sig===lastSig)return;lastSig=sig;
+ if(editing()){dirty=true;return}      // never rebuild the table while a dropdown/input is in use
  render()}
 function render(){$('count').textContent=caps.length?`(${caps.length})`:'';
  $('head').innerHTML='<tr><th>#</th><th>time</th>'+cols.map(c=>`<th>${c.label}</th>`).join('')+'<th>tag</th><th>decode</th><th>bytes (LSB-first)</th><th></th></tr>';
  const tb=$('rows');
  tb.innerHTML=caps.length?caps.slice().reverse().map(c=>{const d=c.decode&&c.decode.sections&&c.decode.sections[0]||{};const dec=c.type==='nec'?`NEC ${c.addr.toString(16).toUpperCase().padStart(2,'0')}/${c.cmd.toString(16).toUpperCase().padStart(2,'0')}`:(d.encoding?`${d.encoding} ${d.bits?d.bits.length+'b':''}${c.decode.sections.length>1?' ×'+c.decode.sections.length:''}`:c.type);
-  return `<tr class="${c.id===selected?'sel':''}${c.id===lastSeen?' new':''}" onclick="selected=${c.id};render()"><td>${c.id}</td><td style="white-space:nowrap;color:var(--mute)">${c.ts.slice(11)}</td>${cols.map(col=>`<td>${sel(c,col)}</td>`).join('')}<td class="mono tag" style="white-space:nowrap">${esc(c.tag)}${c.uploaded?' <span style="color:var(--ok)" title="on device">●</span>':''}</td><td style="white-space:nowrap">${dec}</td><td class="mono">${esc(d.bytes_lsb||'')}</td><td style="white-space:nowrap"><button class="sec sm" onclick="event.stopPropagation();play(${c.id})">play</button> <button class="sec sm" onclick="event.stopPropagation();upload(${c.id})">${c.uploaded?'re-up':'to device'}</button> <button class="sec sm" onclick="event.stopPropagation();del(${c.id})">✕</button></td></tr>`}).join(''):'<tr><td colspan="12" style="color:var(--mute)">press a key on the remote…</td></tr>';
+  return `<tr class="${c.id===selected?'sel':''}${c.id===lastSeen?' new':''}" onclick="selected=${c.id};lastSig='';load()"><td>${c.id}</td><td style="white-space:nowrap;color:var(--mute)">${c.ts.slice(11)}</td>${cols.map(col=>`<td>${sel(c,col)}</td>`).join('')}<td class="mono tag" style="white-space:nowrap">${esc(c.tag)}${c.uploaded?' <span style="color:var(--ok)" title="on device">●</span>':''}</td><td style="white-space:nowrap">${dec}</td><td class="mono">${esc(d.bytes_lsb||'')}</td><td style="white-space:nowrap"><button class="sec sm" onclick="event.stopPropagation();play(${c.id})">play</button> <button class="sec sm" onclick="event.stopPropagation();upload(${c.id})">${c.uploaded?'re-up':'to device'}</button> <button class="sec sm" onclick="event.stopPropagation();del(${c.id})">✕</button></td></tr>`}).join(''):'<tr><td colspan="12" style="color:var(--mute)">press a key on the remote…</td></tr>';
  const opts=caps.map(c=>`<option value="${c.id}">#${c.id} ${esc(c.tag||'(untagged)')}</option>`).join('');if($('cmpA').innerHTML!==opts){$('cmpA').innerHTML=opts;$('cmpB').innerHTML=opts}}
 async function play(id){const r=await api('/api/play',{m:'POST',q:{id}});msg(r.message||JSON.stringify(r))}
 async function upload(id,quiet){const c=caps.find(c=>c.id===id);if(!c||!c.tag)return quiet?0:msg('tag it first');const r=await api('/api/upload',{m:'POST',q:{id}});msg(r.message||JSON.stringify(r));if(!quiet)load()}
