@@ -782,6 +782,7 @@ void setup() {
     delay(200);
     Serial.println();
     Serial.println("=== IR blaster (CB3S / BK7231N) ===");
+    Serial.printf("boot: reason=%s (%d)\n", lt_get_reboot_reason_name(lt_get_reboot_reason()), (int)lt_get_reboot_reason());
     cfg.load();
     btnLoad();
     appApplyStatusLed();

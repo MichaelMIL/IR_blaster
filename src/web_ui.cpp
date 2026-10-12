@@ -250,6 +250,7 @@ static void handleStatus() {
     j += "\"firmware\":\"ir_blaster / LibreTiny " + String(lt_get_version()) + "\",";
     j += "\"hostname\":\"ir-blaster\",";
     j += "\"uptime\":" + String(millis() / 1000) + ",";
+    j += "\"reboot_reason\":" + jsonStr(lt_get_reboot_reason_name(lt_get_reboot_reason())) + ",";
     j += "\"wifi\":" + String(appWifiConnected() ? "true" : "false") + ",";
     j += "\"ssid\":" + jsonStr(cfg.ssid) + ",";
     j += "\"ip\":\"" + appIp() + "\",";
