@@ -205,7 +205,9 @@ tr.new td{background:#1d2a1f}tr.sel td{background:#1d2436}
 code,.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
 .chips{display:flex;flex-wrap:wrap;gap:6px}.chip{padding:4px 9px;border-radius:14px;background:#262b36;cursor:pointer;font-size:12px;user-select:none}.chip:hover{background:#333a48}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grow{flex:1}
-#cmp{white-space:pre;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5}
+#cmp{overflow:auto;max-height:420px;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;word-break:break-all}
+.cmprow{display:flex;gap:8px;margin:6px 0;white-space:pre;overflow-x:auto}.cmpl{color:var(--mute);min-width:52px}
+main>*,main>div>*{min-width:0}
 .diff{color:var(--warn);font-weight:700}.tag{font-weight:600;color:#9ec1ff}
 #msg{color:var(--mute);font-size:12px;margin-top:8px;min-height:16px}
 @media(max-width:900px){main{grid-template-columns:1fr}}
@@ -260,12 +262,16 @@ async function upload(id,quiet){const c=caps.find(c=>c.id===id);if(!c||!c.tag)re
 async function uploadAll(){let n=0;for(const c of caps){if(c.tag&&!c.uploaded){const r=await api('/api/upload',{m:'POST',q:{id:c.id}});if(r.ok)n++;msg(r.message)}}msg(`uploaded ${n} recording(s) to the device`);load()}
 async function del(id){await api('/api/capture',{m:'DELETE',q:{id}});load()}
 async function exportAll(){const r=await api('/api/export',{m:'POST'});msg(r.message)}
-function bitsOf(c){const s=c.decode&&c.decode.sections||[];return s.map(x=>x.bits||'').join('|')}
-function compare(){const a=caps.find(c=>c.id==$('cmpA').value),b=caps.find(c=>c.id==$('cmpB').value);if(!a||!b)return;const ba=bitsOf(a),bb=bitsOf(b);let out=`#${a.id} ${a.tag||''}\n#${b.id} ${b.tag||''}\n\n`;
- if(!ba||!bb){out+='no decoded bits for one of them';$('cmp').textContent=out;return}
- const n=Math.max(ba.length,bb.length);let la='',lb='',lm='',diffs=[];for(let i=0;i<n;i++){const x=ba[i]||' ',y=bb[i]||' ';const d=x!==y;la+=d?`<span class="diff">${x}</span>`:x;lb+=d?`<span class="diff">${y}</span>`:y;lm+=d?'^':' ';if(d)diffs.push(i)}
- out=esc(out)+`A: ${la}\nB: ${lb}\n   ${lm}\n\n`;out+=diffs.length?`${diffs.length} bit(s) differ at positions ${diffs.join(', ')} (bit 0 = first transmitted). Byte index = position / 8.`:'identical bit streams';
- const sa=(a.decode.sections||[])[0]||{},sb=(b.decode.sections||[])[0]||{};if(sa.bytes_lsb&&sb.bytes_lsb)out+=`\n\nbytes A: ${sa.bytes_lsb}\nbytes B: ${sb.bytes_lsb}`;$('cmp').innerHTML=out}
+function bitsOf(c){const s=(c.decode&&c.decode.sections)||[];return s.map(x=>x.bits||'').join('')}
+function compare(){const a=caps.find(c=>c.id==$('cmpA').value),b=caps.find(c=>c.id==$('cmpB').value);const box=$('cmp');if(!a||!b){box.textContent='pick two captures';return}
+ try{const ba=bitsOf(a),bb=bitsOf(b);let head=`<div>A: #${a.id} <span class="tag">${esc(a.tag||'(untagged)')}</span> &nbsp; B: #${b.id} <span class="tag">${esc(b.tag||'(untagged)')}</span></div>`;
+  if(!ba||!bb){box.innerHTML=head+'<div style="color:var(--mute)">no decoded bits for one of them (raw / undecodable capture)</div>';return}
+  const n=Math.max(ba.length,bb.length),diffs=[];let rows='';
+  for(let o=0;o<n;o+=64){let la='',lb='',lm='';for(let i=o;i<Math.min(o+64,n);i++){const x=ba[i]||'·',y=bb[i]||'·',d=x!==y;if(d)diffs.push(i);const g=(i%8===0&&i>o)?' ':'';la+=g+(d?`<span class="diff">${x}</span>`:x);lb+=g+(d?`<span class="diff">${y}</span>`:y);lm+=g+(d?'^':' ')}
+   rows+=`<div class="cmprow"><span class="cmpl">bit ${o}</span><div>A ${la}<br>B ${lb}<br>&nbsp; ${lm}</div></div>`}
+  let foot=diffs.length?`<div>${diffs.length} bit(s) differ at ${diffs.join(', ')} &nbsp;(bit 0 = first transmitted; byte = bit ÷ 8)</div>`:'<div style="color:var(--ok)">identical bit streams</div>';
+  const sa=((a.decode||{}).sections||[])[0]||{},sb=((b.decode||{}).sections||[])[0]||{};if(sa.bytes_lsb&&sb.bytes_lsb)foot+=`<div class="mono" style="margin-top:6px">bytes A: ${esc(sa.bytes_lsb)}<br>bytes B: ${esc(sb.bytes_lsb)}</div>`;
+  box.innerHTML=head+rows+foot}catch(e){box.textContent='compare failed: '+e.message}}
 load();setInterval(load,1000);
 </script></body></html>
 """
