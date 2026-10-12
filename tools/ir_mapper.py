@@ -216,7 +216,7 @@ code,.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
 <section><h2>Next capture</h2>
  <p style="margin:0 0 8px;color:var(--mute);font-size:12px">A new capture copies the previous row's settings; if nothing was changed the temperature steps up by one. Fix any dropdown on a row and the following captures continue from there.</p>
  <div id="next" class="mono" style="font-size:13px"></div>
- <div class="row" style="margin-top:10px"><label style="font-size:12px;color:var(--mute)"><input type="checkbox" id="autoup" checked style="width:auto"> auto-upload tagged captures to the device</label></div>
+ <div class="row" style="margin-top:10px"><label style="font-size:12px;color:var(--mute)"><input type="checkbox" id="autoup" style="width:auto"> auto-upload tagged captures to the device (off: captures stay on this PC; use "to device" / "Upload all tagged" when you want them on the blaster)</label></div>
 </section>
 <section><h2>Session</h2>
  <div class="row"><button class="sec sm" onclick="exportAll()">Export for ir_analyze.py</button><button class="sec sm" onclick="uploadAll()">Upload all tagged to device</button></div>

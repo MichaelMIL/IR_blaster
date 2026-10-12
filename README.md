@@ -226,9 +226,9 @@ row, e.g. `cool_22_auto_off`, `heat_24_high_off_sleep`, `off`.
   no typing; change a dropdown (mode, fan, …) on a row and the following
   captures continue from there. The "Next capture" panel shows what the next
   row will get.
-- **auto-upload** (on by default) stores every tagged capture on the device as
-  a recording, so it appears on `/remote` and in Home Assistant right away;
-  editing a row re-tags it and marks it for re-upload.
+- Captures stay on the PC. "to device" / "Upload all tagged" store them on the
+  blaster as recordings (then they appear on `/remote` and in Home Assistant);
+  the optional **auto-upload** checkbox does that for every tagged capture.
 - **play** replays a capture through the device; **Compare two captures**
   highlights the bits that differ, which is how you find the temperature /
   mode / checksum fields.
