@@ -189,6 +189,7 @@ All `POST`s take query-string arguments.
 
 ```
 GET  /api/status                       firmware, wifi, pins, heap, reboot reason, mqtt, ac state
+GET  /api/config[?secrets=1]           every saved parameter in one JSON object (passwords masked unless secrets=1)
 GET  /api/ac   POST /api/ac?power=&mode=&temp=&fan=[&loopback=1]
 POST /api/send?addr=&cmd=  |  ?raw=0x…  [&loopback=1]     loopback keeps the receiver on (self-test)
 GET  /api/received         POST /api/received/clear
@@ -210,7 +211,7 @@ POST /update                           multipart "file" = firmware.uf2 (OTA)
 115200 baud on UART1. `help` lists everything; the main groups:
 
 ```
-status | reboot | reset                         wifi ssid|pass|connect|status|clear
+status | config [secrets] | reboot | reset      wifi ssid|pass|connect|status|clear
 ac …                                            mqtt host|user|pass|clear
 send <addr> <cmd> | raw <hex32>                 rec | save | play | list | del | dump | export | stream
 led <1-3> pin|test, led all test, led scan      rx pin|test|scan

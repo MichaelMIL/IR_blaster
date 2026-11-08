@@ -113,12 +113,18 @@ code{font-family:ui-monospace,Menlo,monospace;background:#0c0e12;padding:1px 5px
  <div id="mqttmsg" style="margin-top:8px;color:var(--mute);font-size:13px"></div>
  <p style="margin:10px 0 0;color:var(--mute);font-size:12px">With MQTT discovery enabled in Home Assistant, the device and one button entity per remote button appear automatically, plus a "Last IR code" sensor.</p>
 </section>
+<section><h2>Settings</h2>
+ <p style="margin:0 0 10px;color:var(--mute);font-size:13px">Every saved parameter in one JSON object (<code>GET /api/config</code>, add <code>?secrets=1</code> for passwords).</p>
+ <div class="row"><button class="sec" onclick="showCfg()">Show settings</button><a href="/api/config?secrets=1" download="ir_settings.json"><button class="sec">Download with passwords</button></a></div>
+ <pre id="cfgout" style="display:none;margin-top:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap"></pre>
+</section>
 <section><h2>Status</h2><table id="st"></table></section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 const log=m=>{const l=$('log');l.textContent+=m+"\n";l.scrollTop=l.scrollHeight};
 async function api(p,{m='GET',q={}}={}){const u=new URL(p,location.href);for(const k in q)u.searchParams.set(k,q[k]);const r=await fetch(u,{method:m});const t=await r.text();if(!r.ok)throw new Error(t||r.status);try{return JSON.parse(t)}catch{return t}}
+async function showCfg(){const o=$('cfgout');o.style.display='block';try{o.textContent=JSON.stringify(await api('/api/config'),null,2)}catch(e){o.textContent='error: '+e.message}}
 const hex=(v,w)=>'0x'+v.toString(16).toUpperCase().padStart(w,'0');
 let cands=[],lastSeq=-1;
 function fillSel(id,val){const s=$(id);s.innerHTML='<option value="none">none</option>'+cands.map(p=>`<option value="${p}">P${p}</option>`).join('');s.value=val==null?'none':val}
@@ -641,6 +647,7 @@ void webBegin() {
     if (started) return;
     server.on("/", HTTP_GET, handleRoot);
     server.on("/api/status", HTTP_GET, handleStatus);
+    server.on("/api/config", HTTP_GET, []() { server.send(200, "application/json", cfg.toJson(server.arg("secrets") == "1")); });
     server.on("/api/received", HTTP_GET, handleReceived);
     server.on("/api/received/clear", HTTP_POST, []() { appClearReceived(); ok("cleared"); });
     server.on("/api/send", HTTP_POST, handleSend);

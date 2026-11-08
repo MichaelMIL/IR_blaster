@@ -1,4 +1,5 @@
 #include "config.h"
+#include "ac.h"
 #include <libretiny.h>
 
 // Stored in the first 4 KiB block of the "userdata" flash partition
@@ -157,6 +158,33 @@ void DeviceConfig::save() const {
     if (lt_flash_write(CFG_OFFSET, (uint8_t *)&s, sizeof(s)) != sizeof(s)) {
         Serial.println("config: write failed");
     }
+}
+
+static String jsonEsc(const String &s) {
+    String o = "\"";
+    for (size_t i = 0; i < s.length(); i++) {
+        char c = s[i];
+        if (c == '"' || c == '\\') { o += '\\'; o += c; }
+        else if ((uint8_t)c >= 0x20) o += c;
+    }
+    return o + "\"";
+}
+static String secretJson(const String &s, bool show) {
+    if (s.length() == 0) return "null";
+    return show ? jsonEsc(s) : String("\"***\"");
+}
+static String pinJs(uint8_t p) { return p == NO_PIN ? String("null") : String(p); }
+
+String DeviceConfig::toJson(bool secrets) const {
+    String j = "{\"wifi\":{\"ssid\":" + jsonEsc(ssid) + ",\"pass\":" + secretJson(pass, secrets) + "},";
+    j += "\"pins\":{\"led1\":" + pinJs(ledPin[0]) + ",\"led2\":" + pinJs(ledPin[1]) + ",\"led3\":" + pinJs(ledPin[2]) +
+         ",\"rx\":" + pinJs(rxPin) + ",\"status\":" + pinJs(statusPin) + ",\"status_invert\":" + (statusInvert ? "true" : "false") + "},";
+    j += "\"carrier\":" + String(carrierHz) + ",";
+    j += "\"mqtt\":{\"host\":" + (mqttHost.length() ? jsonEsc(mqttHost) : String("null")) + ",\"port\":" + String(mqttPort) +
+         ",\"user\":" + (mqttUser.length() ? jsonEsc(mqttUser) : String("null")) + ",\"pass\":" + secretJson(mqttPass, secrets) + "},";
+    j += "\"ac\":{\"power\":\"" + String(acPower ? "on" : "off") + "\",\"mode\":\"" + acModeName(acMode) +
+         "\",\"temp\":" + String(acTemp) + ",\"fan\":\"" + acFanName(acFan) + "\"}}";
+    return j;
 }
 
 int DeviceConfig::activeLedPins(uint8_t *out) const {

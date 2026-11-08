@@ -23,6 +23,9 @@ struct DeviceConfig {
     void load();
     void save() const;
     void reset();
+    // Every saved parameter as JSON (one object, for GET /api/config and the
+    // serial `config` command). Passwords are "***" unless secrets is true.
+    String toJson(bool secrets) const;
 
     int  activeLedPins(uint8_t *out) const;   // fills out[], returns count
     bool hasWifi() const { return ssid.length() > 0; }

@@ -236,6 +236,7 @@ static void printHelp() {
     Serial.println(
         "commands:\n"
         "  status                       firmware / wifi / pin summary\n"
+        "  config [secrets]             every saved parameter as one JSON object (also GET /api/config)\n"
         "  wifi ssid <name>             set network name (spaces allowed)\n"
         "  wifi pass <password>         set password\n"
         "  wifi connect | status | clear\n"
@@ -599,6 +600,7 @@ static void handleCommand(const String &cmd) {
 
     if (c == "help") { printHelp(); return; }
     if (c == "status") { printStatus(); return; }
+    if (c == "config") { Serial.println(cfg.toJson(n >= 2 && t[1] == "secrets")); return; }
     if (c == "reboot") { Serial.println("rebooting"); delay(100); lt_reboot(); return; }
     if (c == "reset") {
         cfg.reset(); cfg.save(); applyTxPins(); applyRxPin(); appApplyStatusLed();
