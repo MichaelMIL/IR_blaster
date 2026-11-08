@@ -1,0 +1,18 @@
+# systemd unit for the IR web remote. Install on the home server with:
+#   sudo cp ir-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ir-web
+# Adjust User, the path to server.py and the --device address first.
+[Unit]
+Description=IR blaster web remote
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/usr/bin/python3 /home/pi/ir_blaster/tools/ir_web/server.py --device 192.168.50.209 --port 8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

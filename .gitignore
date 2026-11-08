@@ -1,3 +1,4 @@
 .pio/
 .vscode/
 *.bin
+tools/ir_web/ir_web_data.json

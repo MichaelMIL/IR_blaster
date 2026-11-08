@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>IR Remote</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm0 2v16h10V4H7zm2 2h6v3H9V6zm0 5h2v2H9v-2zm4 0h2v2h-2v-2zm-4 4h2v2H9v-2zm4 0h2v2h-2v-2z"/></svg>
+    <span>IR Remote</span>
+  </div>
+  <button class="conn" id="conn" title="Device connection" onclick="openSettings()">
+    <span class="dot" id="dot"></span><span id="connText">connecting…</span>
+  </button>
+</header>
+
+<nav class="tabs" id="tabs">
+  <a href="#ac" class="on" data-tab="ac">AC</a>
+  <a href="#scenes" data-tab="scenes">Scenes</a>
+  <a href="#remote" data-tab="remote">Remote</a>
+  <a href="#activity" data-tab="activity">Activity</a>
+</nav>
+
+<main>
+<!-- ============================================================ AC -->
+<section id="ac" class="panel on">
+  <div class="card acard">
+    <div class="acdisplay" id="acdisplay">
+      <div class="acmode" id="acModeIcon"></div>
+      <div class="actemp"><span id="acTemp">--</span><span class="deg">°C</span></div>
+      <div class="acsub">
+        <span id="acModeText">—</span>
+        <span class="fan" id="acFanBars" title="fan"><i></i><i></i><i></i></span>
+        <span id="acFanText"></span>
+      </div>
+      <div class="acstate" id="acPowerText">off</div>
+    </div>
+
+    <div class="acrow temprow">
+      <button class="round big" id="tempDown" aria-label="colder">−</button>
+      <button class="power" id="acPower" aria-label="power">
+        <svg viewBox="0 0 24 24" width="30" height="30"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>
+      </button>
+      <button class="round big" id="tempUp" aria-label="warmer">+</button>
+    </div>
+
+    <div class="label">Mode</div>
+    <div class="seg" id="modeSeg">
+      <button data-mode="auto" title="auto"><span class="ico" data-ico="auto"></span><small>Auto</small></button>
+      <button data-mode="cool" title="cool"><span class="ico" data-ico="cool"></span><small>Cool</small></button>
+      <button data-mode="dry"  title="dry"><span class="ico" data-ico="dry"></span><small>Dry</small></button>
+      <button data-mode="fan"  title="fan"><span class="ico" data-ico="fan"></span><small>Fan</small></button>
+      <button data-mode="heat" title="heat"><span class="ico" data-ico="heat"></span><small>Heat</small></button>
+    </div>
+
+    <div class="label">Fan</div>
+    <div class="seg" id="fanSeg">
+      <button data-fan="auto"><small>Auto</small></button>
+      <button data-fan="low"><span class="bars b1"><i></i><i></i><i></i></span><small>Low</small></button>
+      <button data-fan="med"><span class="bars b2"><i></i><i></i><i></i></span><small>Med</small></button>
+      <button data-fan="high"><span class="bars b3"><i></i><i></i><i></i></span><small>High</small></button>
+    </div>
+
+    <div class="label">Quick temperature</div>
+    <div class="chips" id="tempChips"></div>
+    <div class="msg" id="acMsg"></div>
+  </div>
+</section>
+
+<!-- ======================================================== SCENES -->
+<section id="scenes" class="panel">
+  <div class="grid" id="sceneGrid"></div>
+  <div class="card slim">
+    <div class="row">
+      <input id="sceneName" placeholder="Scene name (e.g. Night)" maxlength="24">
+      <input id="sceneIcon" placeholder="icon" maxlength="2" style="width:64px;text-align:center">
+      <button class="pri" onclick="saveScene()">Save current AC state</button>
+    </div>
+    <p class="hint">A scene stores the AC state shown on the AC tab. Long-press (or right-click) a scene to delete it. Scenes live on this server, not on the blaster.</p>
+  </div>
+</section>
+
+<!-- ======================================================== REMOTE -->
+<section id="remote" class="panel">
+  <h2>Buttons <span class="hint">configured on the blaster</span></h2>
+  <div class="grid" id="btnGrid"><div class="empty">loading…</div></div>
+  <h2>Recordings <span class="hint">raw IR frames stored on the blaster</span></h2>
+  <div class="list" id="recList"><div class="empty">loading…</div></div>
+  <div class="card slim">
+    <div class="label">Send NEC code</div>
+    <div class="row">
+      <input id="necAddr" placeholder="addr 0x04" style="width:110px">
+      <input id="necCmd" placeholder="cmd 0x08" style="width:110px">
+      <button onclick="sendNec()">Send</button>
+    </div>
+    <div class="msg" id="remoteMsg"></div>
+  </div>
+</section>
+
+<!-- ====================================================== ACTIVITY -->
+<section id="activity" class="panel">
+  <h2>Received <span class="hint">what the blaster's receiver sees</span></h2>
+  <div class="list" id="rxList"><div class="empty">nothing received yet</div></div>
+  <h2>Device</h2>
+  <div class="card slim"><table class="kv" id="statusTable"></table>
+    <div class="row" style="margin-top:12px">
+      <a id="adminLink" href="#" target="_blank" rel="noopener"><button>Open device admin page</button></a>
+      <button class="sec" onclick="openSettings()">Server settings</button>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- settings dialog -->
+<div class="modal" id="settings" hidden>
+  <div class="card">
+    <h2>Server settings</h2>
+    <div class="label">Blaster address (IP or hostname)</div>
+    <div class="row"><input id="devAddr" placeholder="192.168.50.209"><button class="pri" onclick="saveSettings()">Save</button></div>
+    <p class="hint">This web server forwards every request to the blaster at this address. Change it if the device gets a new IP.</p>
+    <div class="row" style="justify-content:flex-end"><button class="sec" onclick="closeSettings()">Close</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
