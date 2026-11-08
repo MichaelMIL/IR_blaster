@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+<title>IR Remote · History</title>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm0 2v16h10V4H7zm2 2h6v3H9V6zm0 5h2v2H9v-2zm4 0h2v2h-2v-2zm-4 4h2v2H9v-2zm4 0h2v2h-2v-2z"/></svg>
+    <span>IR Remote</span>
+  </div>
+  <a class="conn" href="/advanced" title="Device connection"><span class="dot" id="dot"></span><span id="connText">connecting…</span></a>
+</header>
+<nav class="tabs">
+  <a href="/">Remote</a>
+  <a href="/timers">Timers</a>
+  <a href="/history">History</a>
+  <a href="/advanced">Advanced</a>
+</nav>
+<main>
+<div class="ranges" id="ranges" style="margin-top:8px">
+  <button data-h="6">6 h</button><button data-h="24" class="on">24 h</button><button data-h="72">3 d</button><button data-h="168">7 d</button><button data-h="720">30 d</button>
+  <span class="sp"></span>
+  <button id="tableToggle" title="show the samples as a table">Table</button>
+</div>
+<div class="stats" id="stats"></div>
+<div class="charts">
+  <div class="chart" id="chTemp"></div>
+  <div class="chart" id="chOn"></div>
+  <div class="chart" id="chRssi"></div>
+  <div class="chart" id="chHeap"></div>
+</div>
+<div class="card slim scroll" id="tableWrap" hidden></div>
+<h2>Events</h2>
+<div class="ranges" id="evFilter">
+  <button data-t="" class="on">All</button><button data-t="cmd">Commands</button><button data-t="rx">IR received</button><button data-t="timer">Timers</button><button data-t="device">Device</button>
+</div>
+<div class="card slim" id="events"><div class="empty">loading…</div></div>
+</main>
+<div class="toast" id="toast" hidden></div>
+<script src="common.js"></script>
+<script src="history.js"></script>
+</body>
+</html>

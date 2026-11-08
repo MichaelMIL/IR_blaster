@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+<title>IR Remote · Advanced</title>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm0 2v16h10V4H7zm2 2h6v3H9V6zm0 5h2v2H9v-2zm4 0h2v2h-2v-2zm-4 4h2v2H9v-2zm4 0h2v2h-2v-2z"/></svg>
+    <span>IR Remote</span>
+  </div>
+  <a class="conn" href="/advanced" title="Device connection"><span class="dot" id="dot"></span><span id="connText">connecting…</span></a>
+</header>
+<nav class="tabs">
+  <a href="/">Remote</a>
+  <a href="/timers">Timers</a>
+  <a href="/history">History</a>
+  <a href="/advanced">Advanced</a>
+</nav>
+<main>
+<h2 style="margin-top:8px">Device</h2>
+<div class="card slim"><table class="kv" id="statusTable"><tr><td class="empty">loading…</td></tr></table>
+  <div class="row" style="margin-top:12px">
+    <a data-admin href="#" target="_blank" rel="noopener"><button>Open device admin page</button></a>
+    <button class="sec" onclick="reboot()">Reboot device</button>
+  </div>
+</div>
+
+<h2>Recordings <span class="hint">raw IR frames stored on the blaster</span></h2>
+<div class="list" id="recList"><div class="empty">loading…</div></div>
+<div class="card slim">
+  <div class="row">
+    <input id="recName" placeholder="name for a new recording" maxlength="15">
+    <button onclick="recordNew()" id="recBtn">Record (15 s)</button>
+  </div>
+  <p class="hint">Press "Record", then point the remote at the blaster and press the key once.</p>
+</div>
+
+<h2>Send NEC code</h2>
+<div class="card slim">
+  <div class="row">
+    <input id="necAddr" placeholder="addr 0x04" style="width:120px;flex:none">
+    <input id="necCmd" placeholder="cmd 0x08" style="width:120px;flex:none">
+    <button onclick="sendNec()">Send</button>
+    <span class="msg" id="remoteMsg" style="margin:0"></span>
+  </div>
+</div>
+
+<h2>Received <span class="hint">what the blaster's receiver sees · <a href="/history">full history</a></span></h2>
+<div class="list" id="rxList"><div class="empty">nothing received yet</div></div>
+
+<h2>Server</h2>
+<div class="card slim">
+  <div class="label" style="margin-top:0">Blaster address (IP or hostname)</div>
+  <div class="row"><input id="devAddr" placeholder="192.168.50.209"><button class="pri" onclick="saveSettings()">Save</button></div>
+  <p class="hint" id="serverInfo">This server forwards every request to the blaster at this address and records history once a minute.</p>
+  <div class="row" style="margin-top:10px">
+    <a href="/local/history.jsonl" download="ir_history.jsonl"><button class="sec">Download history (JSONL)</button></a>
+    <a href="/api/export" download="ir_export.json"><button class="sec">Download recordings (JSON)</button></a>
+  </div>
+</div>
+</main>
+<div class="toast" id="toast" hidden></div>
+<script src="common.js"></script>
+<script src="advanced.js"></script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+<title>IR Remote · Timers</title>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm0 2v16h10V4H7zm2 2h6v3H9V6zm0 5h2v2H9v-2zm4 0h2v2h-2v-2zm-4 4h2v2H9v-2zm4 0h2v2h-2v-2z"/></svg>
+    <span>IR Remote</span>
+  </div>
+  <a class="conn" href="/advanced" title="Device connection"><span class="dot" id="dot"></span><span id="connText">connecting…</span></a>
+</header>
+<nav class="tabs">
+  <a href="/">Remote</a>
+  <a href="/timers">Timers</a>
+  <a href="/history">History</a>
+  <a href="/advanced">Advanced</a>
+</nav>
+<main>
+<h2 style="margin-top:8px">Countdown <span class="hint">do something once, after a delay</span></h2>
+<div class="list" id="cdList"><div class="empty">no countdown running</div></div>
+<div class="card slim">
+  <div class="form">
+    <div class="row"><label>In</label>
+      <div class="chips" id="cdChips"></div>
+      <input id="cdMin" type="number" min="1" max="1440" placeholder="min" style="width:90px;flex:none">
+      <span class="hint" style="margin:0">or at</span><input id="cdAt" type="time" style="width:120px;flex:none">
+    </div>
+    <div class="row"><label>Do</label><select id="cdAction"></select><div id="cdCustom" class="row" hidden></div></div>
+    <div class="row"><label></label><button class="pri" onclick="addCountdown()">Start countdown</button></div>
+  </div>
+</div>
+
+<h2>Schedules <span class="hint">repeat on chosen weekdays</span></h2>
+<div class="list" id="schList"><div class="empty">no schedules yet</div></div>
+<div class="card slim">
+  <div class="form">
+    <div class="row"><label>At</label><input id="schTime" type="time" value="07:00" style="width:120px;flex:none"><div class="days" id="schDays"></div></div>
+    <div class="row"><label>Do</label><select id="schAction"></select><div id="schCustom" class="row" hidden></div></div>
+    <div class="row"><label>Name</label><input id="schLabel" placeholder="optional, e.g. Morning warm-up" maxlength="40"></div>
+    <div class="row"><label></label><button class="pri" onclick="addSchedule()">Add schedule</button><span class="hint" id="tzInfo" style="margin:0"></span></div>
+  </div>
+</div>
+</main>
+<div class="toast" id="toast" hidden></div>
+<script src="common.js"></script>
+<script src="timers.js"></script>
+</body>
+</html>

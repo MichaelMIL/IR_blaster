@@ -115,16 +115,17 @@ Hostname `ir-blaster.local` (mDNS) or the IP from the console / router.
 ## Web remote on a home server
 
 `tools/ir_web/` is a standalone web app meant to run all the time on a home
-server (Raspberry Pi, NAS, Mac mini …). It gives a phone-friendly remote with
-an AC panel (power, temperature, mode, fan, quick temperatures), **scenes**
-(saved AC states, e.g. "Night = cool 26 °C low"), the remote buttons and
-recordings stored on the blaster, a live log of what the receiver sees and a
-device status panel. It is installable as a home-screen app (web manifest).
+server (Raspberry Pi, NAS, Mac mini …). The browser only talks to this server;
+the server forwards every `/api/*` request to the blaster, samples it once a
+minute, and runs timers even when no browser is open. It is installable as a
+home-screen app (web manifest). Four pages:
 
-The browser only talks to this server; the server forwards every `/api/*`
-request to the blaster, so the blaster's tiny web server never has to serve
-pages or several phones at once. Scenes and the device address are kept in
-`ir_web_data.json` next to the script (not on the blaster).
+| Page | What is on it |
+|------|---------------|
+| **`/` Remote** | AC remote (power, temperature, mode, fan, quick temperatures), **sleep timer** chips (AC off in 30 min … 3 h, with a live countdown and cancel), **scenes** (saved AC states, e.g. "Night = cool 26 °C low"; long-press to delete), and the remote buttons defined on the blaster. |
+| **`/timers`** | **Countdowns** (in N minutes or at a clock time, once) and **schedules** (at HH:MM on chosen weekdays, repeating, with an enable switch and "Run now"). Actions: AC off, a scene, a custom AC state, a device button or a recording. |
+| **`/history`** | Range 6 h … 30 d. Stat tiles (hours on, commands, IR received, online %, free heap), charts for AC setpoint with on-periods shaded, AC on-time per hour/day, WiFi signal and free heap (hover/touch for values, "Table" for the raw samples), and an event log (commands, IR received, timers fired, device offline/online). |
+| **`/advanced`** | Device status, recordings (play, record a new one, delete), send a NEC code, what the receiver sees (save the last raw frame as a recording), blaster address, downloads of the history and the recordings, link to the device's own admin page. |
 
 ```
 /usr/bin/python3 tools/ir_web/server.py --device 192.168.50.209 --port 8080
@@ -132,9 +133,11 @@ pages or several phones at once. Scenes and the device address are kept in
 ```
 
 Options: `--device` (IP or hostname of the blaster; saved, can also be changed
-in the page's settings dialog), `--port`, `--bind`, `--data` (where scenes are
-saved), `-v` (log requests). Standard library only, Python 3.8+.
-`tools/ir_web/ir-web.service` is a systemd unit to run it at boot on Linux.
+on the Advanced page), `--port`, `--bind`, `--data` (scenes, timers and
+settings, default `ir_web_data.json`), `--history` (samples and events,
+default `ir_web_history.jsonl`), `--keep-days` (default 30), `-v` (log
+requests). Standard library only, Python 3.8+. Timers use the server's local
+clock. `tools/ir_web/ir-web.service` is a systemd unit to run it at boot.
 
 ## Air conditioner
 
@@ -258,7 +261,7 @@ by the "Local Network" privacy setting and fail with "No route to host".
 | `ir_mapper.py` | **Key mapper GUI** (local web app). Shows captures live in a state table with dropdowns (power, mode, temp, fan, swing, extra); a new capture copies the previous row and steps the temperature up; tags are generated from the state; compare two captures bit by bit; upload captures to the device; export. `--session file.json`, `--host`. |
 | `ac_encode.py` | Build / send AC frames from a state; `--verify session.json` regenerates every tagged capture and compares bit-exactly; `parse_bytes` decodes a frame into a state and reports unexplained bytes. |
 | `ir_analyze.py` | Generic analysis of raw captures: glitch merging, section split, header detection, mark- vs space-coded bits, bytes LSB/MSB-first, protocol-family guess. Reads `/api/export` JSON and `ir_stream.py` JSONL. |
-| `ir_web/` | **Web remote** for a home server: proxies the device API and serves a phone-friendly remote with AC panel, scenes, buttons, recordings and activity log (see [above](#web-remote-on-a-home-server)). |
+| `ir_web/` | **Web remote** for a home server: remote page with AC panel, scenes and sleep timer; timers (countdown + weekly schedules); history charts; advanced/device page (see [above](#web-remote-on-a-home-server)). |
 | `ir_stream.py` | Follow the device's capture stream and append every frame to a JSONL file; `--prompt` names and saves each on the device. |
 
 ## Troubleshooting and lessons learned
